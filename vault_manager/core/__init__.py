@@ -1,0 +1,58 @@
+"""
+Core utilities for Library vault maintenance tools.
+
+This module provides shared functionality used across all Library
+subpackages (tags, images, properties, index).
+
+Usage:
+    from vault_manager.core import get_vault_root, is_ignored_path
+    from vault_manager.core.validation import require_library
+    from vault_manager.core.command import Command
+"""
+
+# Vault operations
+from .vault import (
+    get_vault_root,
+    is_ignored_path,
+    validate_directory,
+    get_markdown_files,
+)
+
+# Command base class
+from .command import Command
+
+# Frontmatter utilities
+from .frontmatter import (
+    extract_frontmatter,
+    extract_tags_from_frontmatter,
+    format_tag_name,
+    is_valid_obsidian_tag,
+    needs_quoting,
+)
+
+# Validation utilities
+from .validation import (
+    require_library,
+    check_api_key,
+    validate_file_path,
+)
+
+__all__ = [
+    # Vault
+    'get_vault_root',
+    'is_ignored_path',
+    'validate_directory',
+    'get_markdown_files',
+    # Command
+    'Command',
+    # Frontmatter
+    'extract_frontmatter',
+    'extract_tags_from_frontmatter',
+    'format_tag_name',
+    'is_valid_obsidian_tag',
+    'needs_quoting',
+    # Validation
+    'require_library',
+    'check_api_key',
+    'validate_file_path',
+]

@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "obsidian-vault-manager"
+version = "2.0.0"
+description = "Standalone CLI tools for Obsidian vault management"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Michael Filbin"}
+]
+keywords = ["obsidian", "vault", "management", "cli", "markdown", "tags", "pkm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Topic :: Utilities",
+]
+
+# Core dependencies
+dependencies = [
+    "pyyaml>=6.0",  # For config file handling
+]
+
+# Optional dependencies
+[project.optional-dependencies]
+ai = [
+    "anthropic>=0.18.0",
+]
+test = [
+    "pytest>=7.4.0",
+    "pytest-bdd>=6.1.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+]
+dev = [
+    "anthropic>=0.18.0",
+    "pytest>=7.4.0",
+    "pytest-bdd>=6.1.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+# Entry points
+[project.scripts]
+vault = "vault_manager.cli:main"
+
+[project.urls]
+Documentation = "https://github.com/mfilbin/obsidian-vault-manager"
+Source = "https://github.com/mfilbin/obsidian-vault-manager"
+Tracker = "https://github.com/mfilbin/obsidian-vault-manager/issues"
+
+# Configure setuptools
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vault_manager*"]
+exclude = ["tests*"]
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: Unit tests",
+    "bdd: Behavior-driven development tests",
+    "tags: Tag management tests",
+    "images: Image management tests",
+    "properties: Properties management tests",
+    "index: Index management tests",
+]
+addopts = [
+    "--strict-markers",
+    "--cov=vault_manager",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+
+# Black configuration
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.pytest_cache
+  | __pycache__
+  | build
+  | dist
+)/
+'''
+
+# Ruff configuration
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = []
