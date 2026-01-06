@@ -240,8 +240,8 @@ class BrokenCommand(Command):
         total_broken = sum(len(refs) for refs in broken_refs.values())
 
         # Build report content
-        report_lines = []
-        report_lines.append("---")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write("---\n")
             f.write("tags:\n")
             f.write("  - vault-management\n")
             f.write("  - broken-images\n")
