@@ -165,7 +165,7 @@ class AuditCommand(Command):
         match = re.match(frontmatter_pattern, content, re.DOTALL)
 
         if not match:
-            return Dict()
+            return None
 
         frontmatter_text = match.group(1)
 
@@ -173,7 +173,7 @@ class AuditCommand(Command):
             frontmatter_dict = yaml.safe_load(frontmatter_text)
             return frontmatter_dict if isinstance(frontmatter_dict, dict) else None
         except yaml.YAMLError:
-            return Dict()
+            return None
 
     def _get_type_name(self, value: Any) -> str:
         """

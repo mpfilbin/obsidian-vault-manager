@@ -275,12 +275,14 @@ class FrontmatterManager:
     - Line ending normalization
 
     Examples:
+        >>> content = "---\\ntitle: Test\\n---\\n# Content"
+        >>>
         >>> # Update a property
         >>> updated = FrontmatterManager.update_property(content, 'status', 'draft')
-
+        >>>
         >>> # Remove a property
         >>> updated = FrontmatterManager.remove_property(content, 'author')
-
+        >>>
         >>> # Bulk update
         >>> updated = FrontmatterManager.bulk_update(content, {'status': 'draft', 'priority': 'high'})
     """
