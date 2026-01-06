@@ -16,10 +16,8 @@ from .common import (
     is_ignored_path,
     is_ignored_file,
     compute_file_hash,
-    is_text_file,
     format_timestamp
 )
-from vault_manager.core.vault import iter_markdown_files, count_markdown_files
 
 
 @dataclass

@@ -5,7 +5,6 @@ This module implements the deduplicate command which removes duplicate
 frontmatter keys, keeping only the last occurrence of each property.
 """
 
-import sys
 import yaml
 from argparse import ArgumentParser, Namespace
 from collections import Counter, OrderedDict

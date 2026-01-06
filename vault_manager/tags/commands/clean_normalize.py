@@ -6,7 +6,6 @@ This module implements the clean normalize subcommand which converts all tags
 to lowercase for consistency across the vault.
 """
 
-import sys
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path

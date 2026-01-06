@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path_for_add, extract_tags_from_frontmatter, is_valid_obsidian_tag
+from ..common import get_vault_root, extract_tags_from_frontmatter, is_valid_obsidian_tag
 from vault_manager.index.common import get_database_path
 from vault_manager.core.frontmatter import is_sensitive_note
-from vault_manager.core.vault import iter_markdown_files, count_markdown_files
+from vault_manager.core.vault import iter_markdown_files
 
 # Try to import anthropic for AI features
 try:

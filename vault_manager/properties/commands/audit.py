@@ -7,13 +7,12 @@ and generates a comprehensive markdown report with statistics and usage patterns
 """
 
 import re
-import sys
 import yaml
 from argparse import ArgumentParser, Namespace
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict
 
 from vault_manager.core.command import Command
 from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
@@ -166,7 +165,7 @@ class AuditCommand(Command):
         match = re.match(frontmatter_pattern, content, re.DOTALL)
 
         if not match:
-            return None
+            return Dict()
 
         frontmatter_text = match.group(1)
 
@@ -174,7 +173,7 @@ class AuditCommand(Command):
             frontmatter_dict = yaml.safe_load(frontmatter_text)
             return frontmatter_dict if isinstance(frontmatter_dict, dict) else None
         except yaml.YAMLError:
-            return None
+            return Dict()
 
     def _get_type_name(self, value: Any) -> str:
         """

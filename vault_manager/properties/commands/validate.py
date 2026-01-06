@@ -10,11 +10,10 @@ import sys
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple
 
 from . import Command
 from ..common import get_vault_root
-from vault_manager.core.frontmatter import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files, validate_directory
 
 try:
@@ -94,12 +93,12 @@ class ValidateCommand(Command):
         """
         # Frontmatter must be at the very top
         if not content.startswith('---'):
-            return None, content, 0, 0
+            return "", content, 0, 0
 
         # Find the closing ---
         lines = content.split('\n')
         if len(lines) < 3:
-            return None, content, 0, 0
+            return "", content, 0, 0
 
         # Find closing delimiter
         end_idx = None
@@ -109,7 +108,7 @@ class ValidateCommand(Command):
                 break
 
         if end_idx is None:
-            return None, content, 0, 0
+            return "", content, 0, 0
 
         frontmatter_lines = lines[1:end_idx]
         frontmatter_text = '\n'.join(frontmatter_lines)

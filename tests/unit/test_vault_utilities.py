@@ -6,7 +6,6 @@ file filtering, and ignore patterns.
 """
 
 import pytest
-from pathlib import Path
 from vault_manager.core.vault import (
     iter_markdown_files,
     count_markdown_files,

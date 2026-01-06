@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from . import Command
 from ..common import get_vault_root, extract_frontmatter
 from vault_manager.index.common import get_database_path
-from vault_manager.core.vault import iter_markdown_files, count_markdown_files
+from vault_manager.core.vault import iter_markdown_files
 
 
 class NoteMetadata:

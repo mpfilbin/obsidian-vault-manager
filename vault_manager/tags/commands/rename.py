@@ -9,7 +9,7 @@ updates the files' frontmatter, and rebuilds the vault index database.
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 from vault_manager.core.command import Command
 from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files

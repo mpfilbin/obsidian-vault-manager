@@ -14,7 +14,7 @@ from datetime import datetime
 
 from . import Command
 from ..common import get_vault_root, is_ignored_path, IMAGE_EXTENSIONS
-from vault_manager.core.vault import iter_markdown_files, count_markdown_files
+from vault_manager.core.vault import iter_markdown_files
 
 
 class BrokenCommand(Command):
