@@ -180,7 +180,7 @@ class NormalizeCommand(Command):
 
         success = atomic_update(file_path, updater, dry_run=dry_run, silent=True)
 
-        if error_msg:
+        if error_msg and isinstance(error_msg, str):
             return False, [error_msg]
         elif not success and not changes:
             return True, []
