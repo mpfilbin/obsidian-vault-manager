@@ -5,17 +5,17 @@ This module implements the deduplicate command which removes duplicate
 frontmatter keys, keeping only the last occurrence of each property.
 """
 
-import os
-import re
 import sys
 import yaml
 from argparse import ArgumentParser, Namespace
 from collections import Counter, OrderedDict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, extract_frontmatter
+from ..common import get_vault_root
+from vault_manager.core.frontmatter import FrontmatterManager
+from vault_manager.core.vault import iter_markdown_files, validate_directory
 
 
 class DeduplicateCommand(Command):
@@ -39,21 +39,8 @@ class DeduplicateCommand(Command):
         # Get vault root
         vault_root = get_vault_root()
 
-        # Resolve directory path
-        if args.directory == '.':
-            target_dir = vault_root
-        else:
-            target_dir = vault_root / args.directory
-
         # Validate directory
-        if not target_dir.exists():
-            print(f"Error: Directory not found: {args.directory}")
-            print(f"Looking for: {target_dir}")
-            sys.exit(1)
-
-        if not target_dir.is_dir():
-            print(f"Error: Not a directory: {args.directory}")
-            sys.exit(1)
+        target_dir = validate_directory(args.directory, vault_root)
 
         # Display header
         print("=" * 60)
@@ -122,29 +109,22 @@ class DeduplicateCommand(Command):
 
         return deduplicated, duplicates
 
-    def _deduplicate_frontmatter(self, frontmatter: str) -> Tuple[str, List[str]]:
+    def _deduplicate_frontmatter(self, frontmatter: str) -> Tuple[Optional[Dict], List[str]]:
         """
         Remove duplicate properties from frontmatter.
 
         Returns:
-            Tuple of (deduplicated_frontmatter, list_of_duplicates_removed)
+            Tuple of (deduplicated_dict, list_of_duplicates_removed)
+            Returns (None, []) if no duplicates found
         """
         deduplicated_dict, duplicates = self._parse_frontmatter_raw(frontmatter)
 
-        # If no duplicates, return original
+        # If no duplicates, return None to indicate no changes
         if not duplicates:
-            return frontmatter, []
+            return None, []
 
-        # Convert back to YAML, keeping the last occurrence of each key
-        deduplicated_yaml = yaml.dump(
-            dict(deduplicated_dict),
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False
-        )
-        deduplicated_yaml = deduplicated_yaml.rstrip('\n')
-
-        return deduplicated_yaml, duplicates
+        # Return the deduplicated dict (serialization will be done by FrontmatterManager)
+        return dict(deduplicated_dict), duplicates
 
     def _deduplicate_file(self, file_path: Path, vault_root: Path, dry_run: bool = False) -> Tuple[bool, List[str]]:
         """
@@ -158,21 +138,22 @@ class DeduplicateCommand(Command):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Extract frontmatter
-            frontmatter, body = extract_frontmatter(content)
+            # Extract frontmatter (need raw text for duplicate detection)
+            from ..common import extract_frontmatter
+            frontmatter_text, body = extract_frontmatter(content)
 
-            if frontmatter is None:
+            if frontmatter_text is None:
                 return True, []
 
-            # Deduplicate frontmatter
-            deduplicated_frontmatter, duplicates = self._deduplicate_frontmatter(frontmatter)
+            # Deduplicate frontmatter (returns dict or None)
+            deduplicated_dict, duplicates = self._deduplicate_frontmatter(frontmatter_text)
 
-            # If no duplicates, skip
+            # If no duplicates found, skip
             if not duplicates:
                 return True, []
 
-            # Reconstruct file
-            updated_content = f"---\n{deduplicated_frontmatter}\n---\n{body}"
+            # Serialize back to markdown using FrontmatterManager
+            updated_content = FrontmatterManager.serialize(deduplicated_dict, body)
 
             # Write back if not dry run
             if not dry_run:
@@ -204,43 +185,28 @@ class DeduplicateCommand(Command):
 
         print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw', 'Calendar'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            stats['total_files'] += 1
+            relative_path = file_path.relative_to(vault_root)
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            # Deduplicate the file
+            success, duplicates = self._deduplicate_file(file_path, vault_root, dry_run)
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
+            if not success:
+                stats['files_failed'] += 1
+                stats['failed_files'].append(str(relative_path))
+            elif duplicates:
+                stats['files_modified'] += 1
+                stats['total_duplicates_removed'] += len(duplicates)
+                for key in duplicates:
+                    stats['duplicate_property_counts'][key] += 1
 
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
-                    continue
-
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = file_path.relative_to(vault_root)
-
-                # Deduplicate the file
-                success, duplicates = self._deduplicate_file(file_path, vault_root, dry_run)
-
-                if not success:
-                    stats['files_failed'] += 1
-                    stats['failed_files'].append(str(relative_path))
-                elif duplicates:
-                    stats['files_modified'] += 1
-                    stats['total_duplicates_removed'] += len(duplicates)
-                    for key in duplicates:
-                        stats['duplicate_property_counts'][key] += 1
-
-                    mode = "Would fix" if dry_run else "Fixed"
-                    print(f"  {mode}: {relative_path}")
-                    for key in duplicates:
-                        print(f"    - Removed duplicate '{key}' property")
+                mode = "Would fix" if dry_run else "Fixed"
+                print(f"  {mode}: {relative_path}")
+                for key in duplicates:
+                    print(f"    - Removed duplicate '{key}' property")
 
         return stats
 

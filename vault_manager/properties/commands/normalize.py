@@ -5,7 +5,6 @@ This module implements the normalize command which standardizes frontmatter
 properties across notes according to defined rules.
 """
 
-import os
 import sys
 import yaml
 from argparse import ArgumentParser, Namespace
@@ -14,7 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, extract_frontmatter
+from ..common import get_vault_root, extract_frontmatter
+from vault_manager.core.vault import iter_markdown_files
 
 
 class NormalizeCommand(Command):
@@ -201,48 +201,33 @@ class NormalizeCommand(Command):
 
         print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw', 'Calendar'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            stats['total_files'] += 1
+            relative_path = file_path.relative_to(vault_root)
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            # Normalize the file
+            success, changes = self._normalize_file(file_path, vault_root, dry_run)
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
-
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
-                    continue
-
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = file_path.relative_to(vault_root)
-
-                # Normalize the file
-                success, changes = self._normalize_file(file_path, vault_root, dry_run)
-
-                if not success:
-                    if "No frontmatter found" in changes[0]:
-                        stats['files_skipped_no_frontmatter'] += 1
-                    else:
-                        stats['files_failed'] += 1
-                        stats['failed_files'].append((str(relative_path), changes[0]))
-                        print(f"  Failed: {relative_path} - {changes[0]}")
-                elif not changes:
-                    stats['files_skipped_no_changes'] += 1
+            if not success:
+                if "No frontmatter found" in changes[0]:
+                    stats['files_skipped_no_frontmatter'] += 1
                 else:
-                    stats['files_changed'] += 1
-                    for change in changes:
-                        stats['change_counts'][change] += 1
+                    stats['files_failed'] += 1
+                    stats['failed_files'].append((str(relative_path), changes[0]))
+                    print(f"  Failed: {relative_path} - {changes[0]}")
+            elif not changes:
+                stats['files_skipped_no_changes'] += 1
+            else:
+                stats['files_changed'] += 1
+                for change in changes:
+                    stats['change_counts'][change] += 1
 
-                    mode = "Would modify" if dry_run else "Modified"
-                    print(f"  {mode}: {relative_path}")
-                    for change in changes:
-                        print(f"    - {change}")
+                mode = "Would modify" if dry_run else "Modified"
+                print(f"  {mode}: {relative_path}")
+                for change in changes:
+                    print(f"    - {change}")
 
         return stats
 

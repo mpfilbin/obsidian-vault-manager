@@ -5,9 +5,10 @@ This module provides shared functionality for vault root discovery,
 path validation, and directory ignore rules used across all vault_manager modules.
 """
 
+import os
 import sys
 from pathlib import Path
-from typing import Optional, Set, List
+from typing import Optional, Set, List, Iterator, Callable
 
 
 # Global vault root cache (set by CLI at startup)
@@ -169,6 +170,10 @@ def get_markdown_files(
         >>> files = get_markdown_files(directory, vault_root)
         >>> all(f.suffix == '.md' for f in files)
         True
+
+    Note:
+        For memory-efficient iteration over large vaults, use iter_markdown_files()
+        instead, which returns an iterator.
     """
     markdown_files = []
 
@@ -184,3 +189,111 @@ def get_markdown_files(
         markdown_files.append(md_file)
 
     return markdown_files
+
+
+def iter_markdown_files(
+    directory: Path,
+    vault_root: Path,
+    additional_ignores: Optional[Set[str]] = None,
+    exclude_excalidraw: bool = True,
+    progress_callback: Optional[Callable[[Path], None]] = None,
+    follow_symlinks: bool = True
+) -> Iterator[Path]:
+    """
+    Iterate over markdown files in a directory (memory-efficient).
+
+    This function yields markdown files one at a time, making it memory-efficient
+    for large vaults. It's the recommended way to process markdown files when
+    you don't need the full list upfront.
+
+    Args:
+        directory: Directory to search
+        vault_root: Vault root directory
+        additional_ignores: Optional additional directories to ignore
+        exclude_excalidraw: Exclude .excalidraw.md files (default True)
+        progress_callback: Optional callback function called for each file found
+        follow_symlinks: Follow symbolic links (default True)
+
+    Yields:
+        Path objects for each markdown file found
+
+    Examples:
+        >>> vault_root = Path('/vault')
+        >>> for md_file in iter_markdown_files(vault_root, vault_root):
+        ...     # Process file
+        ...     pass
+
+        >>> # With progress callback
+        >>> def on_progress(file_path):
+        ...     print(f"Processing: {file_path.name}")
+        >>> for md_file in iter_markdown_files(vault_root, vault_root, progress_callback=on_progress):
+        ...     # Process file
+        ...     pass
+
+        >>> # Without following symlinks
+        >>> for md_file in iter_markdown_files(vault_root, vault_root, follow_symlinks=False):
+        ...     # Process file
+        ...     pass
+    """
+    # Use os.walk() with followlinks parameter for explicit symlink control
+    for root, dirs, files in os.walk(directory, followlinks=follow_symlinks):
+        root_path = Path(root)
+
+        # Skip ignored directories (and prune the walk tree)
+        if is_ignored_path(root_path, vault_root, additional_ignores):
+            dirs[:] = []  # Don't recurse into this directory
+            continue
+
+        # Process markdown files in this directory
+        for filename in files:
+            if not filename.endswith('.md'):
+                continue
+
+            # Skip Excalidraw files if requested
+            if exclude_excalidraw and filename.endswith('.excalidraw.md'):
+                continue
+
+            md_file = root_path / filename
+
+            # Call progress callback if provided
+            if progress_callback:
+                progress_callback(md_file)
+
+            yield md_file
+
+
+def count_markdown_files(
+    directory: Path,
+    vault_root: Path,
+    additional_ignores: Optional[Set[str]] = None,
+    exclude_excalidraw: bool = True,
+    follow_symlinks: bool = True
+) -> int:
+    """
+    Count markdown files in a directory without loading them into memory.
+
+    Useful for progress tracking when you need to know the total count
+    before processing files.
+
+    Args:
+        directory: Directory to search
+        vault_root: Vault root directory
+        additional_ignores: Optional additional directories to ignore
+        exclude_excalidraw: Exclude .excalidraw.md files (default True)
+        follow_symlinks: Follow symbolic links (default True)
+
+    Returns:
+        Number of markdown files found
+
+    Examples:
+        >>> vault_root = Path('/vault')
+        >>> total = count_markdown_files(vault_root, vault_root)
+        >>> print(f"Found {total} markdown files")
+    """
+    count = 0
+    for _ in iter_markdown_files(
+        directory, vault_root, additional_ignores, exclude_excalidraw,
+        follow_symlinks=follow_symlinks
+    ):
+        count += 1
+    return count

@@ -6,7 +6,8 @@ YAML frontmatter in markdown files, as well as tag-specific operations.
 """
 
 import re
-from typing import Optional, Tuple, List
+import yaml
+from typing import Optional, Tuple, List, Dict, Any
 
 
 def extract_frontmatter(content: str) -> Tuple[Optional[str], str]:
@@ -257,3 +258,309 @@ def is_sensitive_note(content: str) -> bool:
             return True
 
     return False
+
+
+class FrontmatterManager:
+    """
+    Centralized manager for YAML frontmatter operations.
+
+    This class provides high-level operations for working with YAML frontmatter
+    in markdown files, eliminating the need for commands to manually parse and
+    serialize YAML.
+
+    All methods handle edge cases like:
+    - Files without frontmatter
+    - Empty frontmatter
+    - Malformed YAML
+    - Line ending normalization
+
+    Examples:
+        >>> # Update a property
+        >>> updated = FrontmatterManager.update_property(content, 'status', 'draft')
+
+        >>> # Remove a property
+        >>> updated = FrontmatterManager.remove_property(content, 'author')
+
+        >>> # Bulk update
+        >>> updated = FrontmatterManager.bulk_update(content, {'status': 'draft', 'priority': 'high'})
+    """
+
+    @staticmethod
+    def extract(content: str) -> Tuple[Optional[Dict[str, Any]], str]:
+        """
+        Extract and parse frontmatter in one step.
+
+        Args:
+            content: Full markdown file content
+
+        Returns:
+            Tuple of (frontmatter_dict, body)
+            - frontmatter_dict: Parsed YAML as dictionary, or None if not found
+            - body: Markdown content after frontmatter
+
+        Examples:
+            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >>> fm_dict, body = FrontmatterManager.extract(content)
+            >>> fm_dict
+            {'title': 'Test'}
+            >>> body
+            '# Hello'
+        """
+        frontmatter_text, body = extract_frontmatter(content)
+
+        if frontmatter_text is None:
+            return None, body
+
+        try:
+            frontmatter_dict = yaml.safe_load(frontmatter_text)
+            # Handle empty frontmatter (parses as None)
+            if frontmatter_dict is None:
+                return {}, body
+            # Ensure it's a dictionary
+            if not isinstance(frontmatter_dict, dict):
+                return None, body
+            return frontmatter_dict, body
+        except yaml.YAMLError:
+            # Malformed YAML - return None
+            return None, body
+
+    @staticmethod
+    def serialize(frontmatter_dict: Optional[Dict[str, Any]], body: str) -> str:
+        """
+        Serialize frontmatter dict and body back to markdown.
+
+        Args:
+            frontmatter_dict: Dictionary to serialize (or None to remove frontmatter)
+            body: Markdown content
+
+        Returns:
+            Complete markdown content with frontmatter
+
+        Examples:
+            >>> fm = {'title': 'Test', 'tags': ['foo', 'bar']}
+            >>> content = FrontmatterManager.serialize(fm, '# Hello')
+            >>> '---' in content
+            True
+        """
+        # If no frontmatter or empty dict, return body only
+        if not frontmatter_dict:
+            return body
+
+        # Serialize to YAML
+        yaml_text = yaml.dump(
+            frontmatter_dict,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False
+        ).rstrip('\n')
+
+        # Reconstruct content
+        return f"---\n{yaml_text}\n---\n{body}"
+
+    @staticmethod
+    def update_property(content: str, key: str, value: Any) -> Tuple[str, bool]:
+        """
+        Update a single property, creating frontmatter if needed.
+
+        Args:
+            content: Full markdown content
+            key: Property name
+            value: Property value
+
+        Returns:
+            Tuple of (updated_content, was_modified)
+            - updated_content: Modified markdown content
+            - was_modified: True if property was added/changed
+
+        Examples:
+            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >>> updated, modified = FrontmatterManager.update_property(content, 'status', 'draft')
+            >>> modified
+            True
+            >>> 'status: draft' in updated
+            True
+        """
+        frontmatter_dict, body = FrontmatterManager.extract(content)
+
+        # Create frontmatter if it doesn't exist
+        if frontmatter_dict is None:
+            frontmatter_dict = {}
+
+        # Check if value actually changed
+        was_modified = (key not in frontmatter_dict) or (frontmatter_dict.get(key) != value)
+
+        # Set the property
+        frontmatter_dict[key] = value
+
+        # Serialize back
+        updated_content = FrontmatterManager.serialize(frontmatter_dict, body)
+
+        return updated_content, was_modified
+
+    @staticmethod
+    def remove_property(content: str, key: str) -> Tuple[str, bool]:
+        """
+        Remove a property from frontmatter.
+
+        If removing the property leaves frontmatter empty, the entire
+        frontmatter block is removed.
+
+        Args:
+            content: Full markdown content
+            key: Property name to remove
+
+        Returns:
+            Tuple of (updated_content, was_removed)
+            - updated_content: Modified markdown content
+            - was_removed: True if property was found and removed
+
+        Examples:
+            >>> content = "---\\ntitle: Test\\nauthor: Me\\n---\\n# Hello"
+            >>> updated, removed = FrontmatterManager.remove_property(content, 'author')
+            >>> removed
+            True
+            >>> 'author' not in updated
+            True
+        """
+        frontmatter_dict, body = FrontmatterManager.extract(content)
+
+        # No frontmatter or key doesn't exist
+        if frontmatter_dict is None or key not in frontmatter_dict:
+            return content, False
+
+        # Remove the property
+        del frontmatter_dict[key]
+
+        # Serialize back (will remove frontmatter if dict is empty)
+        updated_content = FrontmatterManager.serialize(frontmatter_dict, body)
+
+        return updated_content, True
+
+    @staticmethod
+    def bulk_update(content: str, updates: Dict[str, Any]) -> Tuple[str, bool]:
+        """
+        Update multiple properties at once.
+
+        Args:
+            content: Full markdown content
+            updates: Dictionary of property: value pairs to update
+
+        Returns:
+            Tuple of (updated_content, was_modified)
+            - updated_content: Modified markdown content
+            - was_modified: True if any property was added/changed
+
+        Examples:
+            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >>> updates = {'status': 'draft', 'priority': 'high'}
+            >>> updated, modified = FrontmatterManager.bulk_update(content, updates)
+            >>> modified
+            True
+            >>> 'status: draft' in updated and 'priority: high' in updated
+            True
+        """
+        frontmatter_dict, body = FrontmatterManager.extract(content)
+
+        # Create frontmatter if it doesn't exist
+        if frontmatter_dict is None:
+            frontmatter_dict = {}
+
+        # Track if anything changed
+        was_modified = False
+
+        # Apply all updates
+        for key, value in updates.items():
+            if (key not in frontmatter_dict) or (frontmatter_dict.get(key) != value):
+                was_modified = True
+            frontmatter_dict[key] = value
+
+        # Serialize back
+        updated_content = FrontmatterManager.serialize(frontmatter_dict, body)
+
+        return updated_content, was_modified
+
+    @staticmethod
+    def has_property(content: str, key: str) -> bool:
+        """
+        Check if frontmatter has a specific property.
+
+        Args:
+            content: Full markdown content
+            key: Property name to check
+
+        Returns:
+            True if property exists in frontmatter
+
+        Examples:
+            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >>> FrontmatterManager.has_property(content, 'title')
+            True
+            >>> FrontmatterManager.has_property(content, 'author')
+            False
+        """
+        frontmatter_dict, _ = FrontmatterManager.extract(content)
+
+        if frontmatter_dict is None:
+            return False
+
+        return key in frontmatter_dict
+
+    @staticmethod
+    def get_property(content: str, key: str, default: Any = None) -> Any:
+        """
+        Get a property value from frontmatter.
+
+        Args:
+            content: Full markdown content
+            key: Property name
+            default: Default value if property doesn't exist
+
+        Returns:
+            Property value or default
+
+        Examples:
+            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >>> FrontmatterManager.get_property(content, 'title')
+            'Test'
+            >>> FrontmatterManager.get_property(content, 'author', 'Unknown')
+            'Unknown'
+        """
+        frontmatter_dict, _ = FrontmatterManager.extract(content)
+
+        if frontmatter_dict is None:
+            return default
+
+        return frontmatter_dict.get(key, default)
+
+    @staticmethod
+    def validate_yaml(content: str) -> Tuple[bool, Optional[str]]:
+        """
+        Validate YAML syntax in frontmatter.
+
+        Args:
+            content: Full markdown content
+
+        Returns:
+            Tuple of (is_valid, error_message)
+            - is_valid: True if YAML is valid or no frontmatter
+            - error_message: Error description if invalid, None otherwise
+
+        Examples:
+            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >>> valid, error = FrontmatterManager.validate_yaml(content)
+            >>> valid
+            True
+            >>> error is None
+            True
+        """
+        frontmatter_text, _ = extract_frontmatter(content)
+
+        # No frontmatter is valid
+        if frontmatter_text is None:
+            return True, None
+
+        try:
+            yaml.safe_load(frontmatter_text)
+            return True, None
+        except yaml.YAMLError as e:
+            return False, str(e)

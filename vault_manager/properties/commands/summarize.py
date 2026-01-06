@@ -15,6 +15,7 @@ from typing import Dict, Optional, Tuple
 from . import Command
 from ..common import get_vault_root, is_ignored_path
 from vault_manager.core.frontmatter import is_sensitive_note
+from vault_manager.core.vault import iter_markdown_files, count_markdown_files
 
 # Try to import anthropic for AI features
 try:
@@ -273,79 +274,63 @@ Note content:
 
         print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files (max depth: {max_depth})...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
-
+        # Note: iter_markdown_files uses rglob which traverses all depths
+        # We'll need to manually check depth since there's no max_depth parameter
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores={'Excalidraw', 'Calendar'}, exclude_excalidraw=True):
             # Calculate current depth relative to target directory
             try:
-                relative_to_target = root_path.relative_to(directory)
+                relative_to_target = file_path.parent.relative_to(directory)
                 current_depth = len(relative_to_target.parts)
             except ValueError:
                 current_depth = 0
 
             # Skip if we've exceeded max depth
             if current_depth > max_depth:
-                dirs[:] = []
                 continue
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            stats['total_files'] += 1
+            relative_path = file_path.relative_to(vault_root)
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
+            try:
+                # Read file
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # Check if note is marked as sensitive
+                if is_sensitive_note(content):
+                    print(f"  Skipping (sensitive): {relative_path}")
+                    stats['skipped_sensitive'] += 1
                     continue
 
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
+                # Extract frontmatter and check for existing summary
+                frontmatter, body, existing_summary = self._extract_frontmatter_with_summary(content)
+
+                if frontmatter is None:
+                    print(f"  Skipping (no frontmatter): {relative_path}")
+                    stats['skipped_no_frontmatter'] += 1
                     continue
 
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = file_path.relative_to(vault_root)
+                if existing_summary and not overwrite:
+                    print(f"  Skipping (has summary): {relative_path}")
+                    stats['skipped_has_summary'] += 1
+                    continue
 
-                try:
-                    # Read file
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
+                # Generate summary
+                print(f"  {'Would generate' if dry_run else 'Generating'} summary: {relative_path}")
+                summary = self._generate_summary(content, api_key)
+                print(f"    → {summary[:100]}{'...' if len(summary) > 100 else ''}")
 
-                    # Check if note is marked as sensitive
-                    if is_sensitive_note(content):
-                        print(f"  Skipping (sensitive): {relative_path}")
-                        stats['skipped_sensitive'] += 1
-                        continue
-
-                    # Extract frontmatter and check for existing summary
-                    frontmatter, body, existing_summary = self._extract_frontmatter_with_summary(content)
-
-                    if frontmatter is None:
-                        print(f"  Skipping (no frontmatter): {relative_path}")
-                        stats['skipped_no_frontmatter'] += 1
-                        continue
-
-                    if existing_summary and not overwrite:
-                        print(f"  Skipping (has summary): {relative_path}")
-                        stats['skipped_has_summary'] += 1
-                        continue
-
-                    # Generate summary
-                    print(f"  {'Would generate' if dry_run else 'Generating'} summary: {relative_path}")
-                    summary = self._generate_summary(content, api_key)
-                    print(f"    → {summary[:100]}{'...' if len(summary) > 100 else ''}")
-
-                    # Update file
-                    if self._update_file_with_summary(file_path, summary, dry_run):
-                        stats['processed'] += 1
-                    else:
-                        stats['failed'] += 1
-                        stats['failed_files'].append(str(relative_path))
-
-                except Exception as e:
-                    print(f"  Error processing {relative_path}: {e}")
+                # Update file
+                if self._update_file_with_summary(file_path, summary, dry_run):
+                    stats['processed'] += 1
+                else:
                     stats['failed'] += 1
                     stats['failed_files'].append(str(relative_path))
+
+            except Exception as e:
+                print(f"  Error processing {relative_path}: {e}")
+                stats['failed'] += 1
+                stats['failed_files'].append(str(relative_path))
 
         return stats
 

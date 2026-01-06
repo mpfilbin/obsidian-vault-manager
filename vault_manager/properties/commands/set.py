@@ -6,16 +6,14 @@ This command adds or updates a specified property with a given value
 across all files in a directory, with optional filtering by tags.
 """
 
-import re
 import sys
-import yaml
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from vault_manager.core.command import Command
-from vault_manager.core.vault import get_vault_root, get_markdown_files
-from vault_manager.core.frontmatter import extract_tags_from_frontmatter
+from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
+from vault_manager.core.frontmatter import extract_tags_from_frontmatter, FrontmatterManager
 
 
 class SetCommand(Command):
@@ -150,17 +148,22 @@ class SetCommand(Command):
 
         # Get all markdown files
         additional_ignores = {'Excalidraw', 'Calendar'}
-        markdown_files = get_markdown_files(
+
+        # Count files first for progress tracking
+        stats['total_files'] = count_markdown_files(
             directory,
             vault_root,
             additional_ignores=additional_ignores,
             exclude_excalidraw=True
         )
 
-        stats['total_files'] = len(markdown_files)
-
-        # Process each file
-        for file_path in markdown_files:
+        # Process each file using iterator (memory-efficient)
+        for file_path in iter_markdown_files(
+            directory,
+            vault_root,
+            additional_ignores=additional_ignores,
+            exclude_excalidraw=True
+        ):
             try:
                 # Check if file has required tags (if filtering)
                 if required_tags:
@@ -245,39 +248,17 @@ class SetCommand(Command):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Extract frontmatter
-            frontmatter, body, has_frontmatter = self._extract_frontmatter(content)
-
-            # If no frontmatter, create it
-            if not has_frontmatter:
-                frontmatter_dict = {}
-            else:
-                try:
-                    frontmatter_dict = yaml.safe_load(frontmatter) or {}
-                except yaml.YAMLError:
-                    return False, False
-
-            # Check if property already exists
-            if property_name in frontmatter_dict and not overwrite:
+            # Check if property already exists (unless overwrite is enabled)
+            if not overwrite and FrontmatterManager.has_property(content, property_name):
                 return True, False  # Skip, not an error
 
-            # Set the property
-            frontmatter_dict[property_name] = value
-
-            # Serialize back to YAML
-            updated_frontmatter = yaml.dump(
-                frontmatter_dict,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False
+            # Update property using FrontmatterManager
+            updated_content, modified = FrontmatterManager.update_property(
+                content, property_name, value
             )
 
-            # Reconstruct the file content
-            if has_frontmatter:
-                updated_content = f"---\n{updated_frontmatter}---\n{body}"
-            else:
-                # Add frontmatter to file that didn't have it
-                updated_content = f"---\n{updated_frontmatter}---\n{content}"
+            if not modified:
+                return True, False
 
             # Write back to file (unless dry-run)
             if not dry_run:
@@ -288,26 +269,6 @@ class SetCommand(Command):
 
         except Exception as e:
             return False, False
-
-    def _extract_frontmatter(self, content: str) -> Tuple[str, str, bool]:
-        """
-        Extract YAML frontmatter from markdown content.
-
-        Args:
-            content: Full file content
-
-        Returns:
-            Tuple of (frontmatter_text, body, has_frontmatter)
-        """
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if match:
-            frontmatter = match.group(1)
-            body = content[match.end():]
-            return frontmatter, body, True
-        else:
-            return '', content, False
 
     def _print_summary(self, stats: Dict, property_name: str, value: str, dry_run: bool) -> None:
         """Print summary statistics."""

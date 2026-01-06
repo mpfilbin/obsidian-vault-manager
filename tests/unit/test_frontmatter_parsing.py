@@ -11,7 +11,8 @@ from vault_manager.core.frontmatter import (
     extract_tags_from_frontmatter,
     needs_quoting,
     format_tag_name,
-    is_valid_obsidian_tag
+    is_valid_obsidian_tag,
+    FrontmatterManager
 )
 
 
@@ -281,3 +282,258 @@ def test_extract_tags_parametrized(content, expected_count):
 def test_tag_validation_parametrized(tag, is_valid):
     """Parametrized test for tag validation."""
     assert is_valid_obsidian_tag(tag) == is_valid
+
+
+class TestFrontmatterManager:
+    """Test FrontmatterManager class for centralized frontmatter operations."""
+
+    def test_extract_with_frontmatter(self):
+        """Test extracting frontmatter returns dict and body."""
+        content = "---\ntitle: Test\ntags:\n  - foo\n---\n# Content"
+        fm_dict, body = FrontmatterManager.extract(content)
+        assert fm_dict is not None
+        assert fm_dict['title'] == 'Test'
+        assert fm_dict['tags'] == ['foo']
+        assert body == '# Content'
+
+    def test_extract_without_frontmatter(self):
+        """Test extracting from content without frontmatter."""
+        content = "# Just content"
+        fm_dict, body = FrontmatterManager.extract(content)
+        assert fm_dict is None
+        assert body == content
+
+    def test_extract_empty_frontmatter(self):
+        """Test extracting empty frontmatter.
+
+        Note: Empty frontmatter (---\n---\n) is treated as no frontmatter
+        because the regex requires at least some content between delimiters.
+        """
+        content = "---\n---\n# Content"
+        fm_dict, body = FrontmatterManager.extract(content)
+        # Empty frontmatter doesn't match the regex, so it's treated as no frontmatter
+        assert fm_dict is None
+        assert body == content
+
+    def test_extract_malformed_yaml(self):
+        """Test extracting malformed YAML returns None."""
+        content = "---\ntitle: Test\ninvalid yaml: [unclosed\n---\n# Content"
+        fm_dict, body = FrontmatterManager.extract(content)
+        assert fm_dict is None
+        assert body == '# Content'
+
+    def test_serialize_with_dict(self):
+        """Test serializing frontmatter dict back to markdown."""
+        fm_dict = {'title': 'Test', 'tags': ['foo', 'bar']}
+        body = '# Content'
+        content = FrontmatterManager.serialize(fm_dict, body)
+        assert content.startswith('---\n')
+        assert 'title: Test' in content
+        assert 'tags:' in content
+        assert '# Content' in content
+
+    def test_serialize_empty_dict(self):
+        """Test serializing empty dict removes frontmatter."""
+        body = '# Content'
+        content = FrontmatterManager.serialize({}, body)
+        assert content == body
+
+    def test_serialize_none(self):
+        """Test serializing None removes frontmatter."""
+        body = '# Content'
+        content = FrontmatterManager.serialize(None, body)
+        assert content == body
+
+    def test_update_property_add_new(self):
+        """Test updating property that doesn't exist."""
+        content = "---\ntitle: Test\n---\n# Content"
+        updated, modified = FrontmatterManager.update_property(content, 'status', 'draft')
+        assert modified is True
+        assert 'status: draft' in updated
+
+    def test_update_property_modify_existing(self):
+        """Test updating existing property."""
+        content = "---\ntitle: Test\nstatus: draft\n---\n# Content"
+        updated, modified = FrontmatterManager.update_property(content, 'status', 'published')
+        assert modified is True
+        assert 'status: published' in updated
+        assert 'status: draft' not in updated
+
+    def test_update_property_no_change(self):
+        """Test updating property with same value."""
+        content = "---\ntitle: Test\nstatus: draft\n---\n# Content"
+        updated, modified = FrontmatterManager.update_property(content, 'status', 'draft')
+        assert modified is False
+
+    def test_update_property_create_frontmatter(self):
+        """Test updating property creates frontmatter if missing."""
+        content = "# Just content"
+        updated, modified = FrontmatterManager.update_property(content, 'title', 'Test')
+        assert modified is True
+        assert '---\n' in updated
+        assert 'title: Test' in updated
+        assert '# Just content' in updated
+
+    def test_remove_property_exists(self):
+        """Test removing existing property."""
+        content = "---\ntitle: Test\nauthor: Me\n---\n# Content"
+        updated, removed = FrontmatterManager.remove_property(content, 'author')
+        assert removed is True
+        assert 'author' not in updated
+        assert 'title: Test' in updated
+
+    def test_remove_property_not_exists(self):
+        """Test removing non-existent property."""
+        content = "---\ntitle: Test\n---\n# Content"
+        updated, removed = FrontmatterManager.remove_property(content, 'author')
+        assert removed is False
+        assert updated == content
+
+    def test_remove_property_no_frontmatter(self):
+        """Test removing property from content without frontmatter."""
+        content = "# Just content"
+        updated, removed = FrontmatterManager.remove_property(content, 'title')
+        assert removed is False
+        assert updated == content
+
+    def test_remove_last_property(self):
+        """Test removing last property removes frontmatter entirely."""
+        content = "---\ntitle: Test\n---\n# Content"
+        updated, removed = FrontmatterManager.remove_property(content, 'title')
+        assert removed is True
+        assert '---' not in updated
+        assert updated == '# Content'
+
+    def test_bulk_update_multiple_properties(self):
+        """Test updating multiple properties at once."""
+        content = "---\ntitle: Test\n---\n# Content"
+        updates = {'status': 'draft', 'priority': 'high'}
+        updated, modified = FrontmatterManager.bulk_update(content, updates)
+        assert modified is True
+        assert 'status: draft' in updated
+        assert 'priority: high' in updated
+
+    def test_bulk_update_no_changes(self):
+        """Test bulk update with all same values."""
+        content = "---\ntitle: Test\nstatus: draft\n---\n# Content"
+        updates = {'status': 'draft'}
+        updated, modified = FrontmatterManager.bulk_update(content, updates)
+        assert modified is False
+
+    def test_bulk_update_creates_frontmatter(self):
+        """Test bulk update creates frontmatter if missing."""
+        content = "# Just content"
+        updates = {'title': 'Test', 'status': 'draft'}
+        updated, modified = FrontmatterManager.bulk_update(content, updates)
+        assert modified is True
+        assert 'title: Test' in updated
+        assert 'status: draft' in updated
+
+    def test_has_property_true(self):
+        """Test checking for property that exists."""
+        content = "---\ntitle: Test\n---\n# Content"
+        assert FrontmatterManager.has_property(content, 'title') is True
+
+    def test_has_property_false(self):
+        """Test checking for property that doesn't exist."""
+        content = "---\ntitle: Test\n---\n# Content"
+        assert FrontmatterManager.has_property(content, 'author') is False
+
+    def test_has_property_no_frontmatter(self):
+        """Test checking property on content without frontmatter."""
+        content = "# Just content"
+        assert FrontmatterManager.has_property(content, 'title') is False
+
+    def test_get_property_exists(self):
+        """Test getting property value that exists."""
+        content = "---\ntitle: Test\n---\n# Content"
+        value = FrontmatterManager.get_property(content, 'title')
+        assert value == 'Test'
+
+    def test_get_property_not_exists(self):
+        """Test getting property that doesn't exist returns None."""
+        content = "---\ntitle: Test\n---\n# Content"
+        value = FrontmatterManager.get_property(content, 'author')
+        assert value is None
+
+    def test_get_property_with_default(self):
+        """Test getting property with default value."""
+        content = "---\ntitle: Test\n---\n# Content"
+        value = FrontmatterManager.get_property(content, 'author', 'Unknown')
+        assert value == 'Unknown'
+
+    def test_get_property_no_frontmatter(self):
+        """Test getting property from content without frontmatter."""
+        content = "# Just content"
+        value = FrontmatterManager.get_property(content, 'title', 'Default')
+        assert value == 'Default'
+
+    def test_validate_yaml_valid(self):
+        """Test validating valid YAML."""
+        content = "---\ntitle: Test\ntags:\n  - foo\n---\n# Content"
+        is_valid, error = FrontmatterManager.validate_yaml(content)
+        assert is_valid is True
+        assert error is None
+
+    def test_validate_yaml_invalid(self):
+        """Test validating invalid YAML."""
+        content = "---\ntitle: Test\ninvalid: [unclosed\n---\n# Content"
+        is_valid, error = FrontmatterManager.validate_yaml(content)
+        assert is_valid is False
+        assert error is not None
+        assert isinstance(error, str)
+
+    def test_validate_yaml_no_frontmatter(self):
+        """Test validating content without frontmatter."""
+        content = "# Just content"
+        is_valid, error = FrontmatterManager.validate_yaml(content)
+        assert is_valid is True
+        assert error is None
+
+    def test_preserve_property_order(self):
+        """Test that property order is preserved (sort_keys=False)."""
+        content = "---\nz_last: value\na_first: value\nm_middle: value\n---\n# Content"
+        # Update shouldn't reorder
+        updated, _ = FrontmatterManager.update_property(content, 'new_prop', 'value')
+        fm_dict, _ = FrontmatterManager.extract(updated)
+        keys = list(fm_dict.keys())
+        # Original order should be maintained (z, a, m, new)
+        assert keys[0] == 'z_last'
+        assert keys[1] == 'a_first'
+        assert keys[2] == 'm_middle'
+
+    def test_unicode_support(self):
+        """Test that Unicode characters are properly handled."""
+        content = "---\ntitle: 测试\ndescription: Тест\n---\n# Content"
+        fm_dict, body = FrontmatterManager.extract(content)
+        assert fm_dict['title'] == '测试'
+        assert fm_dict['description'] == 'Тест'
+
+        # Test round-trip
+        updated = FrontmatterManager.serialize(fm_dict, body)
+        assert '测试' in updated
+        assert 'Тест' in updated
+
+
+@pytest.mark.parametrize("content,property,value,should_modify", [
+    ("---\ntitle: Test\n---\n# Content", "status", "draft", True),
+    ("---\ntitle: Test\nstatus: draft\n---\n# Content", "status", "draft", False),
+    ("# Just content", "title", "Test", True),
+])
+def test_update_property_parametrized(content, property, value, should_modify):
+    """Parametrized test for update_property."""
+    updated, modified = FrontmatterManager.update_property(content, property, value)
+    assert modified == should_modify
+    if should_modify:
+        assert f"{property}:" in updated or f"{property} :" in updated
+
+
+@pytest.mark.parametrize("content,property,should_remove", [
+    ("---\ntitle: Test\nauthor: Me\n---\n# Content", "author", True),
+    ("---\ntitle: Test\n---\n# Content", "author", False),
+    ("# Just content", "title", False),
+])
+def test_remove_property_parametrized(content, property, should_remove):
+    """Parametrized test for remove_property."""
+    updated, removed = FrontmatterManager.remove_property(content, property)
+    assert removed == should_remove

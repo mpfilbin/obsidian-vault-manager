@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from . import Command
 from ..common import get_vault_root, is_ignored_path, extract_frontmatter
 from vault_manager.index.common import get_database_path
+from vault_manager.core.vault import iter_markdown_files, count_markdown_files
 
 
 class NoteMetadata:
@@ -265,41 +266,30 @@ class RelateCommand(Command):
         else:
             print("\n1. Scanning notes and extracting metadata...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores={'Excalidraw', 'Calendar'}, exclude_excalidraw=True):
+            relative_path = str(file_path.relative_to(vault_root))
 
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
 
-            for filename in files:
-                if not filename.endswith('.md') or filename.endswith('.excalidraw.md'):
+                frontmatter, body = extract_frontmatter(content)
+
+                if frontmatter is None:
                     continue
 
-                file_path = root_path / filename
-                relative_path = str(file_path.relative_to(vault_root))
+                note = NoteMetadata(file_path, relative_path)
+                note.tags = self._extract_tags_from_frontmatter(frontmatter)
+                note.links = self._extract_wiki_links(body)
+                note.title = file_path.name
+                note.title_words = self._extract_title_words(file_path.name)
+                note.folder = str(file_path.parent.relative_to(vault_root))
+                note.has_related = self._check_has_related_property(frontmatter)
 
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
+                notes[relative_path] = note
 
-                    frontmatter, body = extract_frontmatter(content)
-
-                    if frontmatter is None:
-                        continue
-
-                    note = NoteMetadata(file_path, relative_path)
-                    note.tags = self._extract_tags_from_frontmatter(frontmatter)
-                    note.links = self._extract_wiki_links(body)
-                    note.title = filename
-                    note.title_words = self._extract_title_words(filename)
-                    note.folder = str(file_path.parent.relative_to(vault_root))
-                    note.has_related = self._check_has_related_property(frontmatter)
-
-                    notes[relative_path] = note
-
-                except Exception as e:
-                    print(f"  Warning: Could not read {relative_path}: {e}")
+            except Exception as e:
+                print(f"  Warning: Could not read {relative_path}: {e}")
 
         print(f"   Found {len(notes)} notes with frontmatter")
         return notes

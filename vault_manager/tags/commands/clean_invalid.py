@@ -5,17 +5,16 @@ This module implements the clean invalid subcommand which removes tags that don'
 conform to Obsidian's tag validation rules.
 """
 
-import os
-import re
 import sys
-import yaml
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, extract_tags_from_frontmatter, is_valid_obsidian_tag
+from ..common import get_vault_root
+from vault_manager.core.frontmatter import FrontmatterManager, is_valid_obsidian_tag
+from vault_manager.core.vault import iter_markdown_files
 
 
 class CleanInvalidCommand(Command):
@@ -82,47 +81,29 @@ class CleanInvalidCommand(Command):
         else:
             print("\nNo invalid tags found.")
 
-    def _extract_frontmatter(self, content: str) -> Tuple[str, str, bool]:
+    def _clean_tags_from_frontmatter(self, frontmatter_dict: Optional[Dict]) -> Tuple[Optional[Dict], List[str], List[str]]:
         """
-        Extract YAML frontmatter from markdown content.
+        Remove invalid tags from frontmatter dictionary.
+
+        Args:
+            frontmatter_dict: Parsed frontmatter dictionary
 
         Returns:
-            Tuple of (frontmatter_text, body, has_frontmatter)
+            Tuple of (updated_dict, valid_tags, removed_tags)
         """
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if not match:
-            return '', content, False
-
-        frontmatter = match.group(1)
-        body = content[match.end():]
-
-        return frontmatter, body, True
-
-    def _clean_tags_from_frontmatter(self, frontmatter: str) -> Tuple[str, List[str], List[str]]:
-        """
-        Remove invalid tags from YAML frontmatter.
-
-        Returns:
-            Tuple of (updated_frontmatter, valid_tags, removed_tags)
-        """
-        # Parse frontmatter as YAML
-        try:
-            frontmatter_dict = yaml.safe_load(frontmatter) or {}
-        except yaml.YAMLError:
-            return frontmatter, [], []
+        if frontmatter_dict is None:
+            return None, [], []
 
         # Extract current tags
         tags = frontmatter_dict.get('tags', [])
         if not tags:
-            return frontmatter, [], []
+            return frontmatter_dict, [], []
 
         # Ensure tags is a list
         if isinstance(tags, str):
             tags = [tags]
         elif not isinstance(tags, list):
-            return frontmatter, [], []
+            return frontmatter_dict, [], []
 
         # Validate and filter tags
         valid_tags = []
@@ -135,23 +116,22 @@ class CleanInvalidCommand(Command):
             else:
                 removed_tags.append(tag_str)
 
-        # If no tags were removed, return original
+        # If no tags were removed, return None to indicate no changes
         if not removed_tags:
-            return frontmatter, valid_tags, []
+            return None, valid_tags, []
 
-        # Update frontmatter with valid tags only
+        # Create updated dictionary
+        updated_dict = frontmatter_dict.copy()
+
+        # Update with valid tags only
         if valid_tags:
-            frontmatter_dict['tags'] = valid_tags
+            updated_dict['tags'] = valid_tags
         else:
             # Remove tags field entirely if no valid tags remain
-            if 'tags' in frontmatter_dict:
-                del frontmatter_dict['tags']
+            if 'tags' in updated_dict:
+                del updated_dict['tags']
 
-        # Convert back to YAML
-        updated_yaml = yaml.dump(frontmatter_dict, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        updated_yaml = updated_yaml.rstrip('\n')
-
-        return updated_yaml, valid_tags, removed_tags
+        return updated_dict, valid_tags, removed_tags
 
     def _clean_file(self, file_path: Path, vault_root: Path, dry_run: bool = False) -> Tuple[bool, List[str]]:
         """
@@ -165,21 +145,21 @@ class CleanInvalidCommand(Command):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Extract frontmatter
-            frontmatter, body, has_frontmatter = self._extract_frontmatter(content)
+            # Extract frontmatter using FrontmatterManager
+            frontmatter_dict, body = FrontmatterManager.extract(content)
 
-            if not has_frontmatter:
+            if frontmatter_dict is None:
                 return True, []
 
             # Clean tags from frontmatter
-            updated_frontmatter, valid_tags, removed_tags = self._clean_tags_from_frontmatter(frontmatter)
+            updated_dict, valid_tags, removed_tags = self._clean_tags_from_frontmatter(frontmatter_dict)
 
             # If no tags were removed, skip
             if not removed_tags:
                 return True, []
 
-            # Reconstruct file
-            updated_content = f"---\n{updated_frontmatter}\n---\n{body}"
+            # Serialize back to markdown
+            updated_content = FrontmatterManager.serialize(updated_dict, body)
 
             # Write back if not dry run
             if not dry_run:
@@ -211,43 +191,28 @@ class CleanInvalidCommand(Command):
 
         print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw', 'Calendar'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            stats['total_files'] += 1
+            relative_path = file_path.relative_to(vault_root)
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            # Clean the file
+            success, removed_tags = self._clean_file(file_path, vault_root, dry_run)
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
+            if not success:
+                stats['files_failed'] += 1
+                stats['failed_files'].append(str(relative_path))
+            elif removed_tags:
+                stats['files_modified'] += 1
+                stats['total_tags_removed'] += len(removed_tags)
+                for tag in removed_tags:
+                    stats['invalid_tag_counts'][tag] += 1
 
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
-                    continue
-
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = file_path.relative_to(vault_root)
-
-                # Clean the file
-                success, removed_tags = self._clean_file(file_path, vault_root, dry_run)
-
-                if not success:
-                    stats['files_failed'] += 1
-                    stats['failed_files'].append(str(relative_path))
-                elif removed_tags:
-                    stats['files_modified'] += 1
-                    stats['total_tags_removed'] += len(removed_tags)
-                    for tag in removed_tags:
-                        stats['invalid_tag_counts'][tag] += 1
-
-                    mode = "Would remove from" if dry_run else "Removed from"
-                    print(f"  {mode}: {relative_path}")
-                    for tag in removed_tags:
-                        print(f"    - '{tag}' (invalid)")
+                mode = "Would remove from" if dry_run else "Removed from"
+                print(f"  {mode}: {relative_path}")
+                for tag in removed_tags:
+                    print(f"    - '{tag}' (invalid)")
 
         return stats
 

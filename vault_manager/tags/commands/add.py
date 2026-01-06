@@ -17,6 +17,7 @@ from . import Command
 from ..common import get_vault_root, is_ignored_path_for_add, extract_tags_from_frontmatter, is_valid_obsidian_tag
 from vault_manager.index.common import get_database_path
 from vault_manager.core.frontmatter import is_sensitive_note
+from vault_manager.core.vault import iter_markdown_files, count_markdown_files
 
 # Try to import anthropic for AI features
 try:
@@ -596,87 +597,72 @@ Note content:
 
         print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files (max depth: {max_depth})...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
-
+        # Note: iter_markdown_files uses rglob which traverses all depths
+        # We'll need to manually check depth since there's no max_depth parameter
+        # additional_ignores={'Excalidraw'} is handled by is_ignored_path_for_add logic
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores={'Excalidraw'}, exclude_excalidraw=True):
             # Calculate current depth relative to target directory
             try:
-                relative_to_target = root_path.relative_to(directory)
+                relative_to_target = file_path.parent.relative_to(directory)
                 current_depth = len(relative_to_target.parts)
             except ValueError:
                 current_depth = 0
 
             # Skip if we've exceeded max depth
             if current_depth > max_depth:
-                dirs[:] = []  # Don't recurse further
                 continue
 
-            # Skip ignored directories
-            if is_ignored_path_for_add(root_path, vault_root):
-                dirs[:] = []
-                continue
+            stats['total_files'] += 1
+            relative_path = file_path.relative_to(vault_root)
 
-            # Process markdown files in this directory
-            for filename in files:
-                if not filename.endswith('.md'):
+            try:
+                # Read file
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # Check if note is marked as sensitive
+                if is_sensitive_note(content):
+                    print(f"  Skipping (sensitive): {relative_path}")
+                    stats['skipped_sensitive'] += 1
                     continue
 
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
+                # Extract frontmatter and check for existing tags
+                frontmatter, body, existing_tags = self._extract_frontmatter_with_tags(content)
+
+                if frontmatter is None:
+                    print(f"  Skipping (no frontmatter): {relative_path}")
+                    stats['skipped_no_frontmatter'] += 1
                     continue
 
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = file_path.relative_to(vault_root)
+                if existing_tags and not overwrite:
+                    print(f"  Skipping (has tags): {relative_path}")
+                    stats['skipped_has_tags'] += 1
+                    continue
 
-                try:
-                    # Read file
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
+                # Generate tags
+                print(f"  {'Would generate' if dry_run else 'Generating'} tags: {relative_path}")
+                tags, filtered_tags = self._generate_ai_tags(content, api_key, vault_root)
 
-                    # Check if note is marked as sensitive
-                    if is_sensitive_note(content):
-                        print(f"  Skipping (sensitive): {relative_path}")
-                        stats['skipped_sensitive'] += 1
-                        continue
+                # Track filtered tags
+                if filtered_tags:
+                    stats['total_filtered_tags'] += len(filtered_tags)
+                    stats['files_with_filtered_tags'] += 1
+                    print(f"    → Valid tags: {', '.join(tags)}")
+                    print(f"    → Filtered (invalid): {', '.join(filtered_tags)}")
+                else:
+                    print(f"    → {', '.join(tags)}")
 
-                    # Extract frontmatter and check for existing tags
-                    frontmatter, body, existing_tags = self._extract_frontmatter_with_tags(content)
-
-                    if frontmatter is None:
-                        print(f"  Skipping (no frontmatter): {relative_path}")
-                        stats['skipped_no_frontmatter'] += 1
-                        continue
-
-                    if existing_tags and not overwrite:
-                        print(f"  Skipping (has tags): {relative_path}")
-                        stats['skipped_has_tags'] += 1
-                        continue
-
-                    # Generate tags
-                    print(f"  {'Would generate' if dry_run else 'Generating'} tags: {relative_path}")
-                    tags, filtered_tags = self._generate_ai_tags(content, api_key, vault_root)
-
-                    # Track filtered tags
-                    if filtered_tags:
-                        stats['total_filtered_tags'] += len(filtered_tags)
-                        stats['files_with_filtered_tags'] += 1
-                        print(f"    → Valid tags: {', '.join(tags)}")
-                        print(f"    → Filtered (invalid): {', '.join(filtered_tags)}")
-                    else:
-                        print(f"    → {', '.join(tags)}")
-
-                    # Update file
-                    if self._update_file_with_tags(file_path, tags, dry_run):
-                        stats['processed'] += 1
-                    else:
-                        stats['failed'] += 1
-                        stats['failed_files'].append(str(relative_path))
-
-                except Exception as e:
-                    print(f"  Error processing {relative_path}: {e}")
+                # Update file
+                if self._update_file_with_tags(file_path, tags, dry_run):
+                    stats['processed'] += 1
+                else:
                     stats['failed'] += 1
                     stats['failed_files'].append(str(relative_path))
+
+            except Exception as e:
+                print(f"  Error processing {relative_path}: {e}")
+                stats['failed'] += 1
+                stats['failed_files'].append(str(relative_path))
 
         return stats
 

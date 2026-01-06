@@ -5,15 +5,15 @@ This module implements the remove command which removes a specified property
 from YAML frontmatter across all notes in a directory.
 """
 
-import os
 import sys
-import yaml
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Tuple, Dict
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, extract_frontmatter
+from ..common import get_vault_root
+from vault_manager.core.frontmatter import FrontmatterManager
+from vault_manager.core.vault import iter_markdown_files
 
 
 class RemoveCommand(Command):
@@ -87,29 +87,6 @@ class RemoveCommand(Command):
         else:
             print(f"\nNo files contain the property '{property_name}'.")
 
-    def _remove_property_from_frontmatter(self, frontmatter_dict: Dict[str, Any],
-                                         property_name: str) -> Tuple[Optional[Dict[str, Any]], bool]:
-        """
-        Remove a property from frontmatter dictionary.
-
-        Args:
-            frontmatter_dict: Parsed frontmatter dictionary
-            property_name: Name of property to remove
-
-        Returns:
-            Tuple of (modified_dict, was_removed)
-            - modified_dict: Updated dictionary without the property (None if no change)
-            - was_removed: True if property was found and removed
-        """
-        if property_name not in frontmatter_dict:
-            return None, False
-
-        # Create a copy and remove the property
-        modified = frontmatter_dict.copy()
-        del modified[property_name]
-
-        return modified, True
-
     def _update_file_frontmatter(self, file_path: Path, property_name: str,
                                 dry_run: bool = False) -> Tuple[bool, bool]:
         """
@@ -130,41 +107,13 @@ class RemoveCommand(Command):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Extract frontmatter
-            frontmatter_text, body = extract_frontmatter(content)
-
-            if frontmatter_text is None:
-                return True, False
-
-            # Parse frontmatter
-            try:
-                frontmatter_dict = yaml.safe_load(frontmatter_text)
-                if not isinstance(frontmatter_dict, dict):
-                    return True, False
-            except yaml.YAMLError:
-                return True, False
-
-            # Remove property
-            modified_dict, was_removed = self._remove_property_from_frontmatter(
-                frontmatter_dict, property_name
+            # Remove property using FrontmatterManager
+            updated_content, was_removed = FrontmatterManager.remove_property(
+                content, property_name
             )
 
             if not was_removed:
                 return True, False
-
-            # Convert back to YAML
-            if modified_dict:
-                # Still have properties - write them out
-                new_frontmatter = yaml.dump(
-                    modified_dict,
-                    default_flow_style=False,
-                    allow_unicode=True,
-                    sort_keys=False
-                ).rstrip('\n')
-                updated_content = f"---\n{new_frontmatter}\n---\n{body}"
-            else:
-                # No properties left - remove frontmatter entirely
-                updated_content = body
 
             # Write back if not dry run
             if not dry_run:
@@ -202,34 +151,24 @@ class RemoveCommand(Command):
 
         print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw', 'Calendar'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            stats['total_files'] += 1
+            relative_path = str(file_path.relative_to(vault_root))
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            success, was_changed = self._update_file_frontmatter(
+                file_path, property_name, dry_run
+            )
 
-            for filename in files:
-                if not filename.endswith('.md') or filename.endswith('.excalidraw.md'):
-                    continue
-
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = str(file_path.relative_to(vault_root))
-
-                success, was_changed = self._update_file_frontmatter(
-                    file_path, property_name, dry_run
-                )
-
-                if not success:
-                    stats['files_failed'] += 1
-                    print(f"  ✗ Failed: {relative_path}")
-                elif was_changed:
-                    stats['files_changed'] += 1
-                    stats['files_with_property'] += 1
-                    mode = "Would remove" if dry_run else "Removed"
-                    print(f"  ✓ {mode} '{property_name}': {relative_path}")
+            if not success:
+                stats['files_failed'] += 1
+                print(f"  ✗ Failed: {relative_path}")
+            elif was_changed:
+                stats['files_changed'] += 1
+                stats['files_with_property'] += 1
+                mode = "Would remove" if dry_run else "Removed"
+                print(f"  ✓ {mode} '{property_name}': {relative_path}")
 
         return stats
 

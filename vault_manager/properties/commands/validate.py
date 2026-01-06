@@ -5,7 +5,6 @@ This module implements the validate command which checks frontmatter against
 Obsidian's property rules and generates a report of invalid frontmatter.
 """
 
-import os
 import re
 import sys
 from argparse import ArgumentParser, Namespace
@@ -14,7 +13,9 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path
+from ..common import get_vault_root
+from vault_manager.core.frontmatter import FrontmatterManager
+from vault_manager.core.vault import iter_markdown_files, validate_directory
 
 try:
     import yaml
@@ -63,21 +64,8 @@ class ValidateCommand(Command):
         # Get vault root
         vault_root = get_vault_root()
 
-        # Resolve directory path
-        if args.directory == '.':
-            target_dir = vault_root
-        else:
-            target_dir = vault_root / args.directory
-
         # Validate directory
-        if not target_dir.exists():
-            print(f"Error: Directory not found: {args.directory}")
-            print(f"Looking for: {target_dir}")
-            sys.exit(1)
-
-        if not target_dir.is_dir():
-            print(f"Error: Not a directory: {args.directory}")
-            sys.exit(1)
+        target_dir = validate_directory(args.directory, vault_root)
 
         # Display header
         print("=" * 60)
@@ -390,30 +378,20 @@ class ValidateCommand(Command):
 
         print("\nValidating frontmatter...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            total_files += 1
+            relative_path = str(file_path.relative_to(vault_root))
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            issues = self._validate_file(file_path, vault_root)
 
-            for filename in files:
-                if not filename.endswith('.md') or filename.endswith('.excalidraw.md'):
-                    continue
-
-                total_files += 1
-                file_path = root_path / filename
-                relative_path = str(file_path.relative_to(vault_root))
-
-                issues = self._validate_file(file_path, vault_root)
-
-                if issues:
-                    issues_by_file[relative_path] = issues
-                    files_with_issues += 1
-                    error_count = sum(1 for i in issues if i.severity == 'error')
-                    warning_count = sum(1 for i in issues if i.severity == 'warning')
-                    print(f"  ✗ {relative_path}: {error_count} error(s), {warning_count} warning(s)")
+            if issues:
+                issues_by_file[relative_path] = issues
+                files_with_issues += 1
+                error_count = sum(1 for i in issues if i.severity == 'error')
+                warning_count = sum(1 for i in issues if i.severity == 'warning')
+                print(f"  ✗ {relative_path}: {error_count} error(s), {warning_count} warning(s)")
 
         print(f"\nScanned {total_files} files, found {files_with_issues} with issues")
 

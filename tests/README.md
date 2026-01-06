@@ -166,7 +166,7 @@ Unit tests use standard pytest syntax:
 
 ```python
 import pytest
-from Library.module import function
+from vault_manager.module import function
 
 class TestFeature:
     """Group related tests in a class."""

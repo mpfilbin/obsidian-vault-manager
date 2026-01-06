@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 from vault_manager.core.command import Command
-from vault_manager.core.vault import get_vault_root, get_markdown_files
+from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
 
 
 class AuditCommand(Command):
@@ -81,17 +81,22 @@ class AuditCommand(Command):
 
         # Get all markdown files
         additional_ignores = {'Excalidraw'}
-        markdown_files = get_markdown_files(
+
+        # Count files first for progress tracking
+        data['total_files'] = count_markdown_files(
             vault_root,
             vault_root,
             additional_ignores=additional_ignores,
             exclude_excalidraw=True
         )
 
-        data['total_files'] = len(markdown_files)
-
-        # Process each file
-        for file_path in markdown_files:
+        # Process each file using iterator (memory-efficient)
+        for file_path in iter_markdown_files(
+            vault_root,
+            vault_root,
+            additional_ignores=additional_ignores,
+            exclude_excalidraw=True
+        ):
             try:
                 content = file_path.read_text(encoding='utf-8')
                 frontmatter_dict = self._extract_frontmatter_dict(content)

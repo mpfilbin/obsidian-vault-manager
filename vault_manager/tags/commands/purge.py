@@ -6,16 +6,15 @@ This command removes one or more specified tags from all files in the vault,
 updates the files' frontmatter, and rebuilds the vault index database.
 """
 
-import re
 import sys
-import yaml
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from vault_manager.core.command import Command
-from vault_manager.core.vault import get_vault_root, get_markdown_files
+from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
+from vault_manager.core.frontmatter import FrontmatterManager
 
 
 class PurgeCommand(Command):
@@ -122,17 +121,22 @@ class PurgeCommand(Command):
 
         # Get all markdown files (excluding ignored directories)
         additional_ignores = {'Excalidraw'}
-        markdown_files = get_markdown_files(
+
+        # Count files first for progress tracking
+        stats['total_files'] = count_markdown_files(
             vault_root,
             vault_root,
             additional_ignores=additional_ignores,
             exclude_excalidraw=True
         )
 
-        stats['total_files'] = len(markdown_files)
-
-        # Process each file
-        for file_path in markdown_files:
+        # Process each file using iterator (memory-efficient)
+        for file_path in iter_markdown_files(
+            vault_root,
+            vault_root,
+            additional_ignores=additional_ignores,
+            exclude_excalidraw=True
+        ):
             try:
                 success, removed_tags = self._purge_file(
                     file_path,
@@ -186,15 +190,15 @@ class PurgeCommand(Command):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Extract frontmatter
-            frontmatter, body, has_frontmatter = self._extract_frontmatter(content)
+            # Extract frontmatter using FrontmatterManager
+            frontmatter_dict, body = FrontmatterManager.extract(content)
 
-            if not has_frontmatter:
+            if frontmatter_dict is None:
                 return True, []
 
-            # Purge tags from frontmatter
-            updated_frontmatter, removed_tags = self._purge_tags_from_frontmatter(
-                frontmatter,
+            # Purge tags from frontmatter dict
+            updated_dict, removed_tags = self._purge_tags_from_frontmatter(
+                frontmatter_dict,
                 tags_to_purge
             )
 
@@ -202,8 +206,8 @@ class PurgeCommand(Command):
             if not removed_tags:
                 return True, []
 
-            # Reconstruct the file content
-            updated_content = f"---\n{updated_frontmatter}---\n{body}"
+            # Serialize back to markdown using FrontmatterManager
+            updated_content = FrontmatterManager.serialize(updated_dict, body)
 
             # Write back to file (unless dry-run)
             if not dry_run:
@@ -215,91 +219,56 @@ class PurgeCommand(Command):
         except Exception as e:
             return False, []
 
-    def _extract_frontmatter(self, content: str) -> Tuple[str, str, bool]:
-        """
-        Extract YAML frontmatter from markdown content.
-
-        Args:
-            content: Full file content
-
-        Returns:
-            Tuple of (frontmatter_text, body, has_frontmatter)
-        """
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if match:
-            frontmatter = match.group(1)
-            body = content[match.end():]
-            return frontmatter, body, True
-        else:
-            return '', content, False
-
     def _purge_tags_from_frontmatter(
         self,
-        frontmatter: str,
+        frontmatter_dict: Dict,
         tags_to_purge: set
-    ) -> Tuple[str, List[str]]:
+    ) -> Tuple[Dict, List[str]]:
         """
-        Remove specified tags from YAML frontmatter.
+        Remove specified tags from frontmatter dictionary.
 
         Args:
-            frontmatter: YAML frontmatter text
+            frontmatter_dict: Parsed frontmatter dictionary
             tags_to_purge: Set of tags to remove
 
         Returns:
-            Tuple of (updated_frontmatter, removed_tags)
+            Tuple of (updated_dict, removed_tags)
         """
-        try:
-            # Parse YAML
-            frontmatter_dict = yaml.safe_load(frontmatter) or {}
+        # Get current tags
+        if 'tags' not in frontmatter_dict:
+            return frontmatter_dict, []
 
-            # Get current tags
-            if 'tags' not in frontmatter_dict:
-                return frontmatter, []
+        current_tags = frontmatter_dict['tags']
 
-            current_tags = frontmatter_dict['tags']
+        # Handle different tag formats
+        if current_tags is None:
+            return frontmatter_dict, []
 
-            # Handle different tag formats
-            if current_tags is None:
-                return frontmatter, []
+        if isinstance(current_tags, str):
+            current_tags = [current_tags]
+        elif not isinstance(current_tags, list):
+            return frontmatter_dict, []
 
-            if isinstance(current_tags, str):
-                current_tags = [current_tags]
-            elif not isinstance(current_tags, list):
-                return frontmatter, []
+        # Filter out tags to purge (case-sensitive exact match)
+        removed_tags = []
+        updated_tags = []
 
-            # Filter out tags to purge (case-sensitive exact match)
-            removed_tags = []
-            updated_tags = []
+        for tag in current_tags:
+            if tag in tags_to_purge:
+                removed_tags.append(tag)
+            else:
+                updated_tags.append(tag)
 
-            for tag in current_tags:
-                if tag in tags_to_purge:
-                    removed_tags.append(tag)
-                else:
-                    updated_tags.append(tag)
+        # If no tags were removed, return original
+        if not removed_tags:
+            return frontmatter_dict, []
 
-            # If no tags were removed, return original
-            if not removed_tags:
-                return frontmatter, []
+        # Create updated dictionary with remaining tags
+        # Keep empty list if all tags removed (per user requirement)
+        updated_dict = frontmatter_dict.copy()
+        updated_dict['tags'] = updated_tags
 
-            # Update frontmatter with remaining tags
-            # Keep empty list if all tags removed (per user requirement)
-            frontmatter_dict['tags'] = updated_tags
-
-            # Serialize back to YAML
-            updated_frontmatter = yaml.dump(
-                frontmatter_dict,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False
-            )
-
-            return updated_frontmatter, removed_tags
-
-        except yaml.YAMLError:
-            # If YAML parsing fails, return unchanged
-            return frontmatter, []
+        return updated_dict, removed_tags
 
     def _confirm_purge(self, stats: Dict) -> bool:
         """

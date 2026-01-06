@@ -5,11 +5,9 @@ This module provides common fixtures for testing vault management commands.
 """
 
 import pytest
-import tempfile
-import shutil
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict
 
 
 @pytest.fixture
@@ -193,10 +191,8 @@ def mock_vault_root(monkeypatch, temp_vault):
     def mock_get_vault_root():
         return temp_vault
 
-    # Mock for different modules
-    monkeypatch.setattr("Library.tags.common.get_vault_root", mock_get_vault_root)
-    monkeypatch.setattr("Library.images.common.get_vault_root", mock_get_vault_root)
-    monkeypatch.setattr("Library.index.common.get_vault_root", mock_get_vault_root)
+    # Mock vault_manager.core.vault.get_vault_root
+    monkeypatch.setattr("vault_manager.core.vault.get_vault_root", mock_get_vault_root)
 
     return temp_vault
 
@@ -213,8 +209,8 @@ def mock_database_path(monkeypatch, vault_database):
     def mock_get_database_path():
         return vault_database
 
-    monkeypatch.setattr("Library.index.common.get_database_path", mock_get_database_path)
-    monkeypatch.setattr("Library.tags.common.get_database_path", mock_get_database_path)
+    # Mock vault_manager.core.database.get_database_path
+    monkeypatch.setattr("vault_manager.core.database.get_database_path", mock_get_database_path)
 
     return vault_database
 

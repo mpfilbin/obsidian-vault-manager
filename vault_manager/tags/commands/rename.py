@@ -6,16 +6,14 @@ This command replaces all occurrences of an old tag with a new tag,
 updates the files' frontmatter, and rebuilds the vault index database.
 """
 
-import re
 import sys
-import yaml
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 from vault_manager.core.command import Command
-from vault_manager.core.vault import get_vault_root, get_markdown_files
-from vault_manager.core.frontmatter import is_valid_obsidian_tag
+from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
+from vault_manager.core.frontmatter import is_valid_obsidian_tag, FrontmatterManager
 
 
 class RenameCommand(Command):
@@ -143,17 +141,22 @@ class RenameCommand(Command):
 
         # Get all markdown files (excluding ignored directories)
         additional_ignores = {'Excalidraw'}
-        markdown_files = get_markdown_files(
+
+        # Count files first for progress tracking
+        stats['total_files'] = count_markdown_files(
             vault_root,
             vault_root,
             additional_ignores=additional_ignores,
             exclude_excalidraw=True
         )
 
-        stats['total_files'] = len(markdown_files)
-
-        # Process each file
-        for file_path in markdown_files:
+        # Process each file using iterator (memory-efficient)
+        for file_path in iter_markdown_files(
+            vault_root,
+            vault_root,
+            additional_ignores=additional_ignores,
+            exclude_excalidraw=True
+        ):
             try:
                 success, renamed, has_conflict = self._rename_file(
                     file_path,
@@ -213,15 +216,15 @@ class RenameCommand(Command):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Extract frontmatter
-            frontmatter, body, has_frontmatter = self._extract_frontmatter(content)
+            # Extract frontmatter using FrontmatterManager
+            frontmatter_dict, body = FrontmatterManager.extract(content)
 
-            if not has_frontmatter:
+            if frontmatter_dict is None:
                 return True, False, False
 
-            # Rename tag in frontmatter
-            updated_frontmatter, renamed, has_conflict = self._rename_tag_in_frontmatter(
-                frontmatter,
+            # Rename tag in frontmatter dict
+            updated_dict, renamed, has_conflict = self._rename_tag_in_frontmatter(
+                frontmatter_dict,
                 old_tag,
                 new_tag
             )
@@ -230,8 +233,8 @@ class RenameCommand(Command):
             if not renamed:
                 return True, False, False
 
-            # Reconstruct the file content
-            updated_content = f"---\n{updated_frontmatter}---\n{body}"
+            # Serialize back to markdown using FrontmatterManager
+            updated_content = FrontmatterManager.serialize(updated_dict, body)
 
             # Write back to file (unless dry-run)
             if not dry_run:
@@ -243,96 +246,61 @@ class RenameCommand(Command):
         except Exception as e:
             return False, False, False
 
-    def _extract_frontmatter(self, content: str) -> Tuple[str, str, bool]:
-        """
-        Extract YAML frontmatter from markdown content.
-
-        Args:
-            content: Full file content
-
-        Returns:
-            Tuple of (frontmatter_text, body, has_frontmatter)
-        """
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if match:
-            frontmatter = match.group(1)
-            body = content[match.end():]
-            return frontmatter, body, True
-        else:
-            return '', content, False
-
     def _rename_tag_in_frontmatter(
         self,
-        frontmatter: str,
+        frontmatter_dict: Dict,
         old_tag: str,
         new_tag: str
-    ) -> Tuple[str, bool, bool]:
+    ) -> Tuple[Dict, bool, bool]:
         """
-        Rename a tag in YAML frontmatter.
+        Rename a tag in frontmatter dictionary.
 
         Args:
-            frontmatter: YAML frontmatter text
+            frontmatter_dict: Parsed frontmatter dictionary
             old_tag: Tag to rename
             new_tag: New tag name
 
         Returns:
-            Tuple of (updated_frontmatter, renamed: bool, has_conflict: bool)
+            Tuple of (updated_dict, renamed: bool, has_conflict: bool)
         """
-        try:
-            # Parse YAML
-            frontmatter_dict = yaml.safe_load(frontmatter) or {}
+        # Get current tags
+        if 'tags' not in frontmatter_dict:
+            return frontmatter_dict, False, False
 
-            # Get current tags
-            if 'tags' not in frontmatter_dict:
-                return frontmatter, False, False
+        current_tags = frontmatter_dict['tags']
 
-            current_tags = frontmatter_dict['tags']
+        # Handle different tag formats
+        if current_tags is None:
+            return frontmatter_dict, False, False
 
-            # Handle different tag formats
-            if current_tags is None:
-                return frontmatter, False, False
+        if isinstance(current_tags, str):
+            current_tags = [current_tags]
+        elif not isinstance(current_tags, list):
+            return frontmatter_dict, False, False
 
-            if isinstance(current_tags, str):
-                current_tags = [current_tags]
-            elif not isinstance(current_tags, list):
-                return frontmatter, False, False
+        # Check if old tag exists
+        if old_tag not in current_tags:
+            return frontmatter_dict, False, False
 
-            # Check if old tag exists
-            if old_tag not in current_tags:
-                return frontmatter, False, False
+        # Check if new tag already exists (conflict)
+        has_conflict = new_tag in current_tags
 
-            # Check if new tag already exists (conflict)
-            has_conflict = new_tag in current_tags
+        # Replace old tag with new tag
+        updated_tags = []
+        for tag in current_tags:
+            if tag == old_tag:
+                # Only add new tag if it's not already in the list (avoid duplicates)
+                if not has_conflict:
+                    updated_tags.append(new_tag)
+                # If conflict, skip adding (effectively removes old tag)
+            else:
+                updated_tags.append(tag)
 
-            # Replace old tag with new tag
-            updated_tags = []
-            for tag in current_tags:
-                if tag == old_tag:
-                    # Only add new tag if it's not already in the list (avoid duplicates)
-                    if not has_conflict:
-                        updated_tags.append(new_tag)
-                    # If conflict, skip adding (effectively removes old tag)
-                else:
-                    updated_tags.append(tag)
+        # Create updated dictionary with new tags
+        updated_dict = frontmatter_dict.copy()
+        updated_dict['tags'] = updated_tags
 
-            # Update frontmatter with new tags
-            frontmatter_dict['tags'] = updated_tags
-
-            # Serialize back to YAML
-            updated_frontmatter = yaml.dump(
-                frontmatter_dict,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False
-            )
-
-            return updated_frontmatter, True, has_conflict
-
-        except yaml.YAMLError:
-            # If YAML parsing fails, return unchanged
-            return frontmatter, False, False
+        return updated_dict, True, has_conflict
 
     def _confirm_rename(self, stats: Dict, old_tag: str, new_tag: str) -> bool:
         """

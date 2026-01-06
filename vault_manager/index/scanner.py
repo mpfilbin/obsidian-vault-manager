@@ -19,6 +19,7 @@ from .common import (
     is_text_file,
     format_timestamp
 )
+from vault_manager.core.vault import iter_markdown_files, count_markdown_files
 
 
 @dataclass

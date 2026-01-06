@@ -5,7 +5,6 @@ This module implements the remove-alt command which removes alt text from
 wiki-link image embeds in markdown files.
 """
 
-import os
 import re
 import sys
 from argparse import ArgumentParser, Namespace
@@ -13,7 +12,8 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, IMAGE_EXTENSIONS
+from ..common import get_vault_root, IMAGE_EXTENSIONS
+from vault_manager.core.vault import iter_markdown_files
 
 
 class RemoveAltCommand(Command):
@@ -148,37 +148,24 @@ class RemoveAltCommand(Command):
 
         print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores={'Excalidraw'}, exclude_excalidraw=False):
+            stats['total_files'] += 1
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            # Process the file
+            success, changes = self._process_file(file_path, dry_run)
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
+            if success:
+                stats['processed_files'] += 1
+                if changes > 0:
+                    stats['modified_files'] += 1
+                    stats['total_changes'] += changes
+                    relative_path = file_path.relative_to(vault_root)
+                    stats['modified_file_list'].append((str(relative_path), changes))
 
-                stats['total_files'] += 1
-                file_path = root_path / filename
-
-                # Process the file
-                success, changes = self._process_file(file_path, dry_run)
-
-                if success:
-                    stats['processed_files'] += 1
-                    if changes > 0:
-                        stats['modified_files'] += 1
-                        stats['total_changes'] += changes
-                        relative_path = file_path.relative_to(vault_root)
-                        stats['modified_file_list'].append((str(relative_path), changes))
-
-                        mode = "Would modify" if dry_run else "Modified"
-                        print(f"  {mode}: {relative_path} ({changes} change{'s' if changes != 1 else ''})")
-                else:
-                    stats['failed_files'].append(str(file_path.relative_to(vault_root)))
+                    mode = "Would modify" if dry_run else "Modified"
+                    print(f"  {mode}: {relative_path} ({changes} change{'s' if changes != 1 else ''})")
+            else:
+                stats['failed_files'].append(str(file_path.relative_to(vault_root)))
 
         return stats
 

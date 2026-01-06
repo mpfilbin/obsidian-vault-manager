@@ -4,7 +4,6 @@ Step definitions for Missing Tags Command BDD tests.
 
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
-from pathlib import Path
 from argparse import Namespace
 
 from vault_manager.tags.commands.missing import MissingCommand
@@ -126,8 +125,9 @@ def empty_vault(context, temp_vault):
 def run_missing_tags_command(context, mock_vault_root, monkeypatch):
     """Execute the missing tags command."""
     # Mock vault root to use test vault
+    # Patch in the commands.missing module where it's actually used
     monkeypatch.setattr(
-        "Library.tags.commands.missing.get_vault_root",
+        "vault_manager.tags.commands.missing.get_vault_root",
         lambda: context['vault']
     )
 

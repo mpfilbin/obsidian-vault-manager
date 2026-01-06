@@ -6,17 +6,16 @@ This module implements the clean normalize subcommand which converts all tags
 to lowercase for consistency across the vault.
 """
 
-import os
-import re
 import sys
-import yaml
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path
+from ..common import get_vault_root
+from vault_manager.core.frontmatter import FrontmatterManager
+from vault_manager.core.vault import iter_markdown_files, validate_directory
 
 
 class CleanNormalizeCommand(Command):
@@ -45,20 +44,8 @@ class CleanNormalizeCommand(Command):
         vault_root = get_vault_root()
         dry_run = args.dry_run
 
-        # Resolve directory path
-        if args.directory == '.':
-            target_dir = vault_root
-        else:
-            target_dir = vault_root / args.directory
-
         # Validate directory
-        if not target_dir.exists():
-            print(f"Error: Directory not found: {args.directory}")
-            sys.exit(1)
-
-        if not target_dir.is_dir():
-            print(f"Error: Not a directory: {args.directory}")
-            sys.exit(1)
+        target_dir = validate_directory(args.directory, vault_root)
 
         print(f"\n{'='*60}")
         print(f"Tag Case Normalization Tool")
@@ -133,54 +120,39 @@ class CleanNormalizeCommand(Command):
             'failed_files': []
         }
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw', 'Calendar'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            stats['total_files'] += 1
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            try:
+                success, normalized_count, changes = self._normalize_file(
+                    file_path,
+                    vault_root,
+                    dry_run or confirm_phase
+                )
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
+                if normalized_count > 0:
+                    stats['files_modified'] += 1
+                    stats['total_tags_normalized'] += normalized_count
 
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
-                    continue
+                    for old_tag, new_tag in changes:
+                        stats['case_changes'][f"{old_tag} → {new_tag}"] += 1
 
-                stats['total_files'] += 1
-                file_path = root_path / filename
-
-                try:
-                    success, normalized_count, changes = self._normalize_file(
-                        file_path,
-                        vault_root,
-                        dry_run or confirm_phase
-                    )
-
-                    if normalized_count > 0:
-                        stats['files_modified'] += 1
-                        stats['total_tags_normalized'] += normalized_count
-
+                    # Show progress (only during actual normalization, not confirmation)
+                    if not confirm_phase:
+                        relative_path = file_path.relative_to(vault_root)
+                        mode_prefix = "[DRY RUN] Would normalize in" if dry_run else "Normalized in"
+                        print(f"{mode_prefix} {relative_path}")
                         for old_tag, new_tag in changes:
-                            stats['case_changes'][f"{old_tag} → {new_tag}"] += 1
+                            print(f"  {old_tag} → {new_tag}")
 
-                        # Show progress (only during actual normalization, not confirmation)
-                        if not confirm_phase:
-                            relative_path = file_path.relative_to(vault_root)
-                            mode_prefix = "[DRY RUN] Would normalize in" if dry_run else "Normalized in"
-                            print(f"{mode_prefix} {relative_path}")
-                            for old_tag, new_tag in changes:
-                                print(f"  {old_tag} → {new_tag}")
-
-                    if not success:
-                        stats['files_failed'] += 1
-
-                except Exception as e:
+                if not success:
                     stats['files_failed'] += 1
-                    stats['failed_files'].append((file_path, str(e)))
+
+            except Exception as e:
+                stats['files_failed'] += 1
+                stats['failed_files'].append((file_path, str(e)))
 
         return stats
 
@@ -206,21 +178,21 @@ class CleanNormalizeCommand(Command):
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            # Extract frontmatter
-            frontmatter, body, has_frontmatter = self._extract_frontmatter(content)
+            # Extract frontmatter using FrontmatterManager
+            frontmatter_dict, body = FrontmatterManager.extract(content)
 
-            if not has_frontmatter:
+            if frontmatter_dict is None:
                 return True, 0, []
 
-            # Normalize tags in frontmatter
-            updated_frontmatter, normalized_count, changes = self._normalize_tags_in_frontmatter(frontmatter)
+            # Normalize tags in frontmatter dict
+            updated_dict, normalized_count, changes = self._normalize_tags_in_frontmatter(frontmatter_dict)
 
             # If no tags were changed, skip this file
             if normalized_count == 0:
                 return True, 0, []
 
-            # Reconstruct the file content
-            updated_content = f"---\n{updated_frontmatter}---\n{body}"
+            # Serialize back to markdown using FrontmatterManager
+            updated_content = FrontmatterManager.serialize(updated_dict, body)
 
             # Write back to file (unless dry-run)
             if not dry_run:
@@ -232,91 +204,56 @@ class CleanNormalizeCommand(Command):
         except Exception as e:
             return False, 0, []
 
-    def _extract_frontmatter(self, content: str) -> Tuple[str, str, bool]:
-        """
-        Extract YAML frontmatter from markdown content.
-
-        Args:
-            content: Full file content
-
-        Returns:
-            Tuple of (frontmatter_text, body, has_frontmatter)
-        """
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if match:
-            frontmatter = match.group(1)
-            body = content[match.end():]
-            return frontmatter, body, True
-        else:
-            return '', content, False
-
     def _normalize_tags_in_frontmatter(
         self,
-        frontmatter: str
-    ) -> Tuple[str, int, List[Tuple[str, str]]]:
+        frontmatter_dict: Dict
+    ) -> Tuple[Dict, int, List[Tuple[str, str]]]:
         """
-        Normalize tag casing to lowercase in YAML frontmatter.
+        Normalize tag casing to lowercase in frontmatter dictionary.
 
         Args:
-            frontmatter: YAML frontmatter text
+            frontmatter_dict: Parsed frontmatter dictionary
 
         Returns:
-            Tuple of (updated_frontmatter, normalized_count, changes: List[(old, new)])
+            Tuple of (updated_dict, normalized_count, changes: List[(old, new)])
         """
-        try:
-            # Parse YAML
-            frontmatter_dict = yaml.safe_load(frontmatter) or {}
+        # Get current tags
+        if 'tags' not in frontmatter_dict:
+            return frontmatter_dict, 0, []
 
-            # Get current tags
-            if 'tags' not in frontmatter_dict:
-                return frontmatter, 0, []
+        current_tags = frontmatter_dict['tags']
 
-            current_tags = frontmatter_dict['tags']
+        # Handle different tag formats
+        if current_tags is None:
+            return frontmatter_dict, 0, []
 
-            # Handle different tag formats
-            if current_tags is None:
-                return frontmatter, 0, []
+        if isinstance(current_tags, str):
+            current_tags = [current_tags]
+        elif not isinstance(current_tags, list):
+            return frontmatter_dict, 0, []
 
-            if isinstance(current_tags, str):
-                current_tags = [current_tags]
-            elif not isinstance(current_tags, list):
-                return frontmatter, 0, []
+        # Normalize tags to lowercase
+        normalized_tags = []
+        changes = []
+        normalized_count = 0
 
-            # Normalize tags to lowercase
-            normalized_tags = []
-            changes = []
-            normalized_count = 0
+        for tag in current_tags:
+            normalized_tag = tag.lower()
+            normalized_tags.append(normalized_tag)
 
-            for tag in current_tags:
-                normalized_tag = tag.lower()
-                normalized_tags.append(normalized_tag)
+            if tag != normalized_tag:
+                changes.append((tag, normalized_tag))
+                normalized_count += 1
 
-                if tag != normalized_tag:
-                    changes.append((tag, normalized_tag))
-                    normalized_count += 1
+        # If no tags were changed, return original
+        if normalized_count == 0:
+            return frontmatter_dict, 0, []
 
-            # If no tags were changed, return original
-            if normalized_count == 0:
-                return frontmatter, 0, []
+        # Create updated dictionary with normalized tags
+        updated_dict = frontmatter_dict.copy()
+        updated_dict['tags'] = normalized_tags
 
-            # Update frontmatter with normalized tags
-            frontmatter_dict['tags'] = normalized_tags
-
-            # Serialize back to YAML
-            updated_frontmatter = yaml.dump(
-                frontmatter_dict,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False
-            )
-
-            return updated_frontmatter, normalized_count, changes
-
-        except yaml.YAMLError:
-            # If YAML parsing fails, return unchanged
-            return frontmatter, 0, []
+        return updated_dict, normalized_count, changes
 
     def _confirm_normalize(self, stats: Dict) -> bool:
         """

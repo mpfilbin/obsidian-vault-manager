@@ -14,6 +14,7 @@ from datetime import datetime
 
 from . import Command
 from ..common import get_vault_root, is_ignored_path, IMAGE_EXTENSIONS
+from vault_manager.core.vault import iter_markdown_files, count_markdown_files
 
 
 class BrokenCommand(Command):
@@ -115,24 +116,11 @@ class BrokenCommand(Command):
         """
         broken_refs = {}
 
-        for root, dirs, files in os.walk(vault_root):
-            root_path = Path(root)
+        for file_path in iter_markdown_files(vault_root, vault_root, additional_ignores={'Excalidraw'}, exclude_excalidraw=False):
+            refs = self._extract_broken_image_refs(file_path, vault_root, image_files)
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
-
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
-
-                file_path = root_path / filename
-                refs = self._extract_broken_image_refs(file_path, vault_root, image_files)
-
-                if refs:
-                    broken_refs[file_path] = refs
+            if refs:
+                broken_refs[file_path] = refs
 
         return broken_refs
 
