@@ -23,11 +23,11 @@ def extract_frontmatter(content: str) -> Tuple[Optional[str], str]:
         - body: Markdown content after frontmatter
 
     Examples:
-        >>> content = "---\\ntitle: Test\\n---\\n# Hello"
-        >>> fm, body = extract_frontmatter(content)
-        >>> fm
+        >> content = "---\\ntitle: Test\\n---\\n# Hello"
+        >> fm, body = extract_frontmatter(content)
+        >> fm
         'title: Test'
-        >>> body
+        >> body
         '# Hello'
 
     Note:
@@ -65,11 +65,11 @@ def extract_tags_from_frontmatter(content: str) -> List[str]:
         List of tags (without # prefix), sorted alphabetically
 
     Examples:
-        >>> content = "---\\ntags:\\n  - foo\\n  - bar\\n---\\nContent"
-        >>> extract_tags_from_frontmatter(content)
+        >> content = "---\\ntags:\\n  - foo\\n  - bar\\n---\\nContent"
+        >> extract_tags_from_frontmatter(content)
         ['bar', 'foo']
-        >>> content = "---\\ntags: [baz, qux]\\n---\\nContent"
-        >>> extract_tags_from_frontmatter(content)
+        >> content = "---\\ntags: [baz, qux]\\n---\\nContent"
+        >> extract_tags_from_frontmatter(content)
         ['baz', 'qux']
     """
     frontmatter, _ = extract_frontmatter(content)
@@ -234,14 +234,14 @@ def is_sensitive_note(content: str) -> bool:
         True if note has sensitive: true in frontmatter, False otherwise
 
     Examples:
-        >>> content = "---\\nsensitive: true\\n---\\nSecret content"
-        >>> is_sensitive_note(content)
+        >> content = "---\\nsensitive: true\\n---\\nSecret content"
+        >> is_sensitive_note(content)
         True
-        >>> content = "---\\nsensitive: false\\n---\\nPublic content"
-        >>> is_sensitive_note(content)
+        >> content = "---\\nsensitive: false\\n---\\nPublic content"
+        >> is_sensitive_note(content)
         False
-        >>> content = "---\\ntags: [foo]\\n---\\nNormal content"
-        >>> is_sensitive_note(content)
+        >> content = "---\\ntags: [foo]\\n---\\nNormal content"
+        >> is_sensitive_note(content)
         False
     """
     frontmatter, _ = extract_frontmatter(content)
@@ -275,16 +275,16 @@ class FrontmatterManager:
     - Line ending normalization
 
     Examples:
-        >>> content = "---\\ntitle: Test\\n---\\n# Content"
-        >>>
-        >>> # Update a property
-        >>> updated = FrontmatterManager.update_property(content, 'status', 'draft')
-        >>>
-        >>> # Remove a property
-        >>> updated = FrontmatterManager.remove_property(content, 'author')
-        >>>
-        >>> # Bulk update
-        >>> updated = FrontmatterManager.bulk_update(content, {'status': 'draft', 'priority': 'high'})
+        >> content = "---\\ntitle: Test\\n---\\n# Content"
+        >>
+        >> # Update a property
+        >> updated = FrontmatterManager.update_property(content, 'status', 'draft')
+        >>
+        >> # Remove a property
+        >> updated = FrontmatterManager.remove_property(content, 'author')
+        >>
+        >> # Bulk update
+        >> updated = FrontmatterManager.bulk_update(content, {'status': 'draft', 'priority': 'high'})
     """
 
     @staticmethod
@@ -301,11 +301,11 @@ class FrontmatterManager:
             - body: Markdown content after frontmatter
 
         Examples:
-            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
-            >>> fm_dict, body = FrontmatterManager.extract(content)
-            >>> fm_dict
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> fm_dict, body = FrontmatterManager.extract(content)
+            >> fm_dict
             {'title': 'Test'}
-            >>> body
+            >> body
             '# Hello'
         """
         frontmatter_text, body = extract_frontmatter(content)
@@ -375,11 +375,11 @@ class FrontmatterManager:
             - was_modified: True if property was added/changed
 
         Examples:
-            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
-            >>> updated, modified = FrontmatterManager.update_property(content, 'status', 'draft')
-            >>> modified
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> updated, modified = FrontmatterManager.update_property(content, 'status', 'draft')
+            >> modified
             True
-            >>> 'status: draft' in updated
+            >> 'status: draft' in updated
             True
         """
         frontmatter_dict, body = FrontmatterManager.extract(content)
@@ -417,11 +417,11 @@ class FrontmatterManager:
             - was_removed: True if property was found and removed
 
         Examples:
-            >>> content = "---\\ntitle: Test\\nauthor: Me\\n---\\n# Hello"
-            >>> updated, removed = FrontmatterManager.remove_property(content, 'author')
-            >>> removed
+            >> content = "---\\ntitle: Test\\nauthor: Me\\n---\\n# Hello"
+            >> updated, removed = FrontmatterManager.remove_property(content, 'author')
+            >> removed
             True
-            >>> 'author' not in updated
+            >> 'author' not in updated
             True
         """
         frontmatter_dict, body = FrontmatterManager.extract(content)
@@ -453,12 +453,12 @@ class FrontmatterManager:
             - was_modified: True if any property was added/changed
 
         Examples:
-            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
-            >>> updates = {'status': 'draft', 'priority': 'high'}
-            >>> updated, modified = FrontmatterManager.bulk_update(content, updates)
-            >>> modified
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> updates = {'status': 'draft', 'priority': 'high'}
+            >> updated, modified = FrontmatterManager.bulk_update(content, updates)
+            >> modified
             True
-            >>> 'status: draft' in updated and 'priority: high' in updated
+            >> 'status: draft' in updated and 'priority: high' in updated
             True
         """
         frontmatter_dict, body = FrontmatterManager.extract(content)
@@ -494,10 +494,10 @@ class FrontmatterManager:
             True if property exists in frontmatter
 
         Examples:
-            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
-            >>> FrontmatterManager.has_property(content, 'title')
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> FrontmatterManager.has_property(content, 'title')
             True
-            >>> FrontmatterManager.has_property(content, 'author')
+            >> FrontmatterManager.has_property(content, 'author')
             False
         """
         frontmatter_dict, _ = FrontmatterManager.extract(content)
@@ -521,10 +521,10 @@ class FrontmatterManager:
             Property value or default
 
         Examples:
-            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
-            >>> FrontmatterManager.get_property(content, 'title')
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> FrontmatterManager.get_property(content, 'title')
             'Test'
-            >>> FrontmatterManager.get_property(content, 'author', 'Unknown')
+            >> FrontmatterManager.get_property(content, 'author', 'Unknown')
             'Unknown'
         """
         frontmatter_dict, _ = FrontmatterManager.extract(content)
@@ -548,11 +548,11 @@ class FrontmatterManager:
             - error_message: Error description if invalid, None otherwise
 
         Examples:
-            >>> content = "---\\ntitle: Test\\n---\\n# Hello"
-            >>> valid, error = FrontmatterManager.validate_yaml(content)
-            >>> valid
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> valid, error = FrontmatterManager.validate_yaml(content)
+            >> valid
             True
-            >>> error is None
+            >> error is None
             True
         """
         frontmatter_text, _ = extract_frontmatter(content)

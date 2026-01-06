@@ -74,12 +74,12 @@ def is_ignored_path(
         - .backup (backup files)
 
     Examples:
-        >>> vault_root = Path('/vault')
-        >>> is_ignored_path(Path('/vault/.obsidian/config'), vault_root)
+        >> vault_root = Path('/vault')
+        >> is_ignored_path(Path('/vault/.obsidian/config'), vault_root)
         True
-        >>> is_ignored_path(Path('/vault/Notes/file.md'), vault_root)
+        >> is_ignored_path(Path('/vault/Notes/file.md'), vault_root)
         False
-        >>> is_ignored_path(Path('/vault/Excalidraw/drawing.md'), vault_root, {'Excalidraw'})
+        >> is_ignored_path(Path('/vault/Excalidraw/drawing.md'), vault_root, {'Excalidraw'})
         True
     """
     try:
@@ -121,9 +121,9 @@ def validate_directory(
         SystemExit: If validation fails
 
     Examples:
-        >>> vault_root = Path('/vault')
-        >>> target_dir = validate_directory('.', vault_root)
-        >>> target_dir == vault_root
+        >> vault_root = Path('/vault')
+        >> target_dir = validate_directory('.', vault_root)
+        >> target_dir == vault_root
         True
     """
     # Resolve directory path
@@ -165,10 +165,10 @@ def get_markdown_files(
         List of markdown file paths
 
     Examples:
-        >>> vault_root = Path('/vault')
-        >>> directory = vault_root / 'Notes'
-        >>> files = get_markdown_files(directory, vault_root)
-        >>> all(f.suffix == '.md' for f in files)
+        >> vault_root = Path('/vault')
+        >> directory = vault_root / 'Notes'
+        >> files = get_markdown_files(directory, vault_root)
+        >> all(f.suffix == '.md' for f in files)
         True
 
     Note:
@@ -218,20 +218,20 @@ def iter_markdown_files(
         Path objects for each markdown file found
 
     Examples:
-        >>> vault_root = Path('/vault')
-        >>> for md_file in iter_markdown_files(vault_root, vault_root):
+        >> vault_root = Path('/vault')
+        >> for md_file in iter_markdown_files(vault_root, vault_root):
         ...     # Process file
         ...     pass
 
-        >>> # With progress callback
-        >>> def on_progress(file_path):
+        >> # With progress callback
+        >> def on_progress(file_path):
         ...     print(f"Processing: {file_path.name}")
-        >>> for md_file in iter_markdown_files(vault_root, vault_root, progress_callback=on_progress):
+        >> for md_file in iter_markdown_files(vault_root, vault_root, progress_callback=on_progress):
         ...     # Process file
         ...     pass
 
-        >>> # Without following symlinks
-        >>> for md_file in iter_markdown_files(vault_root, vault_root, follow_symlinks=False):
+        >> # Without following symlinks
+        >> for md_file in iter_markdown_files(vault_root, vault_root, follow_symlinks=False):
         ...     # Process file
         ...     pass
     """
@@ -286,9 +286,10 @@ def count_markdown_files(
         Number of markdown files found
 
     Examples:
-        >>> vault_root = Path('/vault')
-        >>> total = count_markdown_files(vault_root, vault_root)
-        >>> print(f"Found {total} markdown files")
+
+        >> vault_root = Path('/vault')
+        >> total = count_markdown_files(vault_root, vault_root)
+        >> print(f"Found {total} markdown files")
     """
     count = 0
     for _ in iter_markdown_files(
