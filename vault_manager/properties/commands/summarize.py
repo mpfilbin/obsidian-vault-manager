@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path
+from ..common import get_vault_root
 from vault_manager.core.frontmatter import is_sensitive_note
 from vault_manager.core.vault import iter_markdown_files, count_markdown_files
 
