@@ -9,11 +9,12 @@ import re
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 from . import Command
 from ..common import get_vault_root, IMAGE_EXTENSIONS
 from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.file_ops import atomic_update
 
 
 class RemoveAltCommand(Command):
@@ -107,28 +108,23 @@ class RemoveAltCommand(Command):
         Returns:
             Tuple of (success, number_of_changes)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                original_content = f.read()
+        changes = 0
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal changes
 
             # Process content
-            modified_content, changes = self._remove_alt_text_from_content(original_content)
+            modified_content, chgs = self._remove_alt_text_from_content(content)
 
             # If no changes, return early
-            if changes == 0:
-                return True, 0
+            if chgs == 0:
+                return None
 
-            # Write back if not dry run
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(modified_content)
+            changes = chgs
+            return modified_content
 
-            return True, changes
-
-        except Exception as e:
-            print(f"  Error processing {file_path}: {e}")
-            return False, 0
+        success = atomic_update(file_path, updater, dry_run=dry_run)
+        return success, changes
 
     def _process_directory(self, directory: Path, vault_root: Path, dry_run: bool = False) -> Dict:
         """

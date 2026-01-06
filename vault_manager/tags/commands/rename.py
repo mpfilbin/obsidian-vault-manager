@@ -9,11 +9,12 @@ updates the files' frontmatter, and rebuilds the vault index database.
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 from vault_manager.core.command import Command
 from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
 from vault_manager.core.frontmatter import is_valid_obsidian_tag, FrontmatterManager
+from vault_manager.core.file_ops import atomic_update
 
 
 class RenameCommand(Command):
@@ -211,40 +212,37 @@ class RenameCommand(Command):
         Returns:
             Tuple of (success: bool, renamed: bool, has_conflict: bool)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        renamed = False
+        has_conflict = False
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal renamed, has_conflict
 
             # Extract frontmatter using FrontmatterManager
             frontmatter_dict, body = FrontmatterManager.extract(content)
 
             if frontmatter_dict is None:
-                return True, False, False
+                return None
 
             # Rename tag in frontmatter dict
-            updated_dict, renamed, has_conflict = self._rename_tag_in_frontmatter(
+            updated_dict, was_renamed, conflict = self._rename_tag_in_frontmatter(
                 frontmatter_dict,
                 old_tag,
                 new_tag
             )
 
             # If tag wasn't found, skip this file
-            if not renamed:
-                return True, False, False
+            if not was_renamed:
+                return None
+
+            renamed = was_renamed
+            has_conflict = conflict
 
             # Serialize back to markdown using FrontmatterManager
-            updated_content = FrontmatterManager.serialize(updated_dict, body)
+            return FrontmatterManager.serialize(updated_dict, body)
 
-            # Write back to file (unless dry-run)
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
-
-            return True, True, has_conflict
-
-        except Exception as e:
-            return False, False, False
+        success = atomic_update(file_path, updater, dry_run=dry_run, silent=True)
+        return success, renamed, has_conflict
 
     def _rename_tag_in_frontmatter(
         self,

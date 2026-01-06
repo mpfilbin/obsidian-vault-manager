@@ -37,6 +37,15 @@ from .validation import (
     validate_file_path,
 )
 
+# File operations
+from .file_ops import (
+    safe_read,
+    safe_write,
+    atomic_update,
+    safe_move,
+    FileOperationError,
+)
+
 __all__ = [
     # Vault
     'get_vault_root',
@@ -55,4 +64,10 @@ __all__ = [
     'require_library',
     'check_api_key',
     'validate_file_path',
+    # File Operations
+    'safe_read',
+    'safe_write',
+    'atomic_update',
+    'safe_move',
+    'FileOperationError',
 ]

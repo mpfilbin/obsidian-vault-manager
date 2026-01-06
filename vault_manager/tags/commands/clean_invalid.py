@@ -15,6 +15,7 @@ from . import Command
 from ..common import get_vault_root
 from vault_manager.core.frontmatter import FrontmatterManager, is_valid_obsidian_tag
 from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.file_ops import atomic_update
 
 
 class CleanInvalidCommand(Command):
@@ -140,37 +141,31 @@ class CleanInvalidCommand(Command):
         Returns:
             Tuple of (success, list_of_removed_tags)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        removed_tags = []
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal removed_tags
 
             # Extract frontmatter using FrontmatterManager
             frontmatter_dict, body = FrontmatterManager.extract(content)
 
             if frontmatter_dict is None:
-                return True, []
+                return None
 
             # Clean tags from frontmatter
-            updated_dict, valid_tags, removed_tags = self._clean_tags_from_frontmatter(frontmatter_dict)
+            updated_dict, valid_tags, tags_removed = self._clean_tags_from_frontmatter(frontmatter_dict)
 
             # If no tags were removed, skip
-            if not removed_tags:
-                return True, []
+            if not tags_removed:
+                return None
+
+            removed_tags = tags_removed
 
             # Serialize back to markdown
-            updated_content = FrontmatterManager.serialize(updated_dict, body)
+            return FrontmatterManager.serialize(updated_dict, body)
 
-            # Write back if not dry run
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
-
-            return True, removed_tags
-
-        except Exception as e:
-            print(f"  Error processing {file_path}: {e}")
-            return False, []
+        success = atomic_update(file_path, updater, dry_run=dry_run)
+        return success, removed_tags
 
     def _process_directory(self, directory: Path, vault_root: Path, dry_run: bool = False) -> Dict:
         """

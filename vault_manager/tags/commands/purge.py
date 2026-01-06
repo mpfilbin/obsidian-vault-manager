@@ -9,11 +9,12 @@ updates the files' frontmatter, and rebuilds the vault index database.
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from vault_manager.core.command import Command
 from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
 from vault_manager.core.frontmatter import FrontmatterManager
+from vault_manager.core.file_ops import atomic_update
 
 
 class PurgeCommand(Command):
@@ -184,39 +185,34 @@ class PurgeCommand(Command):
         Returns:
             Tuple of (success: bool, removed_tags: List[str])
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        removed_tags = []
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal removed_tags
 
             # Extract frontmatter using FrontmatterManager
             frontmatter_dict, body = FrontmatterManager.extract(content)
 
             if frontmatter_dict is None:
-                return True, []
+                return None
 
             # Purge tags from frontmatter dict
-            updated_dict, removed_tags = self._purge_tags_from_frontmatter(
+            updated_dict, tags_removed = self._purge_tags_from_frontmatter(
                 frontmatter_dict,
                 tags_to_purge
             )
 
             # If no tags were removed, skip this file
-            if not removed_tags:
-                return True, []
+            if not tags_removed:
+                return None
+
+            removed_tags = tags_removed
 
             # Serialize back to markdown using FrontmatterManager
-            updated_content = FrontmatterManager.serialize(updated_dict, body)
+            return FrontmatterManager.serialize(updated_dict, body)
 
-            # Write back to file (unless dry-run)
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
-
-            return True, removed_tags
-
-        except Exception as e:
-            return False, []
+        success = atomic_update(file_path, updater, dry_run=dry_run, silent=True)
+        return success, removed_tags
 
     def _purge_tags_from_frontmatter(
         self,

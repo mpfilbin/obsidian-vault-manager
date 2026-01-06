@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from vault_manager.core.command import Command
 from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
 from vault_manager.core.frontmatter import extract_tags_from_frontmatter, FrontmatterManager
+from vault_manager.core.file_ops import safe_read, atomic_update
 
 
 class SetCommand(Command):
@@ -210,15 +211,12 @@ class SetCommand(Command):
         Returns:
             List of tags in the file
         """
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            tags = extract_tags_from_frontmatter(content)
-            return tags
-
-        except Exception:
+        content = safe_read(file_path, silent=True)
+        if content is None:
             return []
+
+        tags = extract_tags_from_frontmatter(content)
+        return tags
 
     def _set_property_in_file(
         self,
@@ -243,32 +241,28 @@ class SetCommand(Command):
         Returns:
             Tuple of (success: bool, modified: bool)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        modified = False
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal modified
 
             # Check if property already exists (unless overwrite is enabled)
             if not overwrite and FrontmatterManager.has_property(content, property_name):
-                return True, False  # Skip, not an error
+                return None  # Skip, not an error
 
             # Update property using FrontmatterManager
-            updated_content, modified = FrontmatterManager.update_property(
+            updated_content, was_modified = FrontmatterManager.update_property(
                 content, property_name, value
             )
 
-            if not modified:
-                return True, False
+            if not was_modified:
+                return None
 
-            # Write back to file (unless dry-run)
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
+            modified = True
+            return updated_content
 
-            return True, True
-
-        except Exception as e:
-            return False, False
+        success = atomic_update(file_path, updater, dry_run=dry_run, silent=True)
+        return success, modified
 
     def _print_summary(self, stats: Dict, property_name: str, value: str, dry_run: bool) -> None:
         """Print summary statistics."""

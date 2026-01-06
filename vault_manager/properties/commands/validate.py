@@ -15,6 +15,7 @@ from typing import Dict, List, Tuple
 from . import Command
 from ..common import get_vault_root
 from vault_manager.core.vault import iter_markdown_files, validate_directory
+from vault_manager.core.file_ops import safe_read, safe_write
 
 try:
     import yaml
@@ -330,42 +331,40 @@ class ValidateCommand(Command):
         """Validate a single file's frontmatter."""
         all_issues = []
 
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            # Check frontmatter position
-            all_issues.extend(self._validate_frontmatter_position(content, file_path))
-
-            # Extract frontmatter
-            frontmatter_text, body, start_line, end_line = self._extract_frontmatter_raw(content)
-
-            if frontmatter_text is None:
-                # No frontmatter found - add as warning
-                all_issues.append(ValidationIssue(
-                    'warning',
-                    'missing_frontmatter',
-                    'File does not contain YAML frontmatter'
-                ))
-                return all_issues
-
-            # Validate YAML syntax
-            all_issues.extend(self._validate_yaml_syntax(frontmatter_text))
-
-            # If YAML is valid, run additional checks
-            syntax_errors = [i for i in all_issues if i.issue_type == 'yaml_syntax_error']
-            if not syntax_errors:
-                all_issues.extend(self._validate_property_names(frontmatter_text))
-                all_issues.extend(self._validate_tags(frontmatter_text))
-                all_issues.extend(self._validate_links(frontmatter_text))
-                all_issues.extend(self._validate_no_markdown(frontmatter_text))
-
-        except Exception as e:
+        content = safe_read(file_path, silent=True)
+        if content is None:
             all_issues.append(ValidationIssue(
                 'error',
                 'file_read_error',
-                f'Error reading file: {str(e)}'
+                f'Error reading file'
             ))
+            return all_issues
+
+        # Check frontmatter position
+        all_issues.extend(self._validate_frontmatter_position(content, file_path))
+
+        # Extract frontmatter
+        frontmatter_text, body, start_line, end_line = self._extract_frontmatter_raw(content)
+
+        if frontmatter_text is None:
+            # No frontmatter found - add as warning
+            all_issues.append(ValidationIssue(
+                'warning',
+                'missing_frontmatter',
+                'File does not contain YAML frontmatter'
+            ))
+            return all_issues
+
+        # Validate YAML syntax
+        all_issues.extend(self._validate_yaml_syntax(frontmatter_text))
+
+        # If YAML is valid, run additional checks
+        syntax_errors = [i for i in all_issues if i.issue_type == 'yaml_syntax_error']
+        if not syntax_errors:
+            all_issues.extend(self._validate_property_names(frontmatter_text))
+            all_issues.extend(self._validate_tags(frontmatter_text))
+            all_issues.extend(self._validate_links(frontmatter_text))
+            all_issues.extend(self._validate_no_markdown(frontmatter_text))
 
         return all_issues
 
@@ -457,10 +456,11 @@ class ValidateCommand(Command):
             lines.append("")
 
         # Write report
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-
-        print(f"\nReport generated: {report_path}")
+        success = safe_write(report_path, '\n'.join(lines))
+        if success:
+            print(f"\nReport generated: {report_path}")
+        else:
+            print(f"\nError: Failed to write report to {report_path}")
 
     def _print_summary(self, issues_by_file: Dict[str, List[ValidationIssue]]) -> None:
         """Print summary of validation results."""

@@ -9,12 +9,13 @@ to lowercase for consistency across the vault.
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from . import Command
 from ..common import get_vault_root
 from vault_manager.core.frontmatter import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files, validate_directory
+from vault_manager.core.file_ops import atomic_update
 
 
 class CleanNormalizeCommand(Command):
@@ -172,36 +173,33 @@ class CleanNormalizeCommand(Command):
         Returns:
             Tuple of (success: bool, normalized_count: int, changes: List[(old, new)])
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        normalized_count = 0
+        changes = []
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal normalized_count, changes
 
             # Extract frontmatter using FrontmatterManager
             frontmatter_dict, body = FrontmatterManager.extract(content)
 
             if frontmatter_dict is None:
-                return True, 0, []
+                return None
 
             # Normalize tags in frontmatter dict
-            updated_dict, normalized_count, changes = self._normalize_tags_in_frontmatter(frontmatter_dict)
+            updated_dict, count, chgs = self._normalize_tags_in_frontmatter(frontmatter_dict)
 
             # If no tags were changed, skip this file
-            if normalized_count == 0:
-                return True, 0, []
+            if count == 0:
+                return None
+
+            normalized_count = count
+            changes = chgs
 
             # Serialize back to markdown using FrontmatterManager
-            updated_content = FrontmatterManager.serialize(updated_dict, body)
+            return FrontmatterManager.serialize(updated_dict, body)
 
-            # Write back to file (unless dry-run)
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
-
-            return True, normalized_count, changes
-
-        except Exception as e:
-            return False, 0, []
+        success = atomic_update(file_path, updater, dry_run=dry_run, silent=True)
+        return success, normalized_count, changes
 
     def _normalize_tags_in_frontmatter(
         self,

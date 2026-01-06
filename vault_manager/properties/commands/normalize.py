@@ -10,11 +10,12 @@ import yaml
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 from . import Command
 from ..common import get_vault_root, extract_frontmatter
 from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.file_ops import atomic_update
 
 
 class NormalizeCommand(Command):
@@ -139,29 +140,34 @@ class NormalizeCommand(Command):
         Returns:
             Tuple of (success, list_of_changes)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        changes = []
+        error_msg = None
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal changes, error_msg
 
             # Extract frontmatter
             frontmatter_text, body = extract_frontmatter(content)
 
             if frontmatter_text is None:
-                return False, ["No frontmatter found"]
+                error_msg = "No frontmatter found"
+                return None
 
             # Parse frontmatter as YAML
             try:
                 frontmatter_dict = yaml.safe_load(frontmatter_text) or {}
             except yaml.YAMLError as e:
-                return False, [f"YAML parsing error: {e}"]
+                error_msg = f"YAML parsing error: {e}"
+                return None
 
             # Normalize the frontmatter
-            normalized_dict, changes = self._normalize_frontmatter(frontmatter_dict)
+            normalized_dict, chgs = self._normalize_frontmatter(frontmatter_dict)
 
             # If no changes, skip
-            if not changes:
-                return True, []
+            if not chgs:
+                return None
+
+            changes = chgs
 
             # Convert back to YAML
             normalized_yaml = yaml.dump(normalized_dict, default_flow_style=False, allow_unicode=True, sort_keys=False)
@@ -170,17 +176,16 @@ class NormalizeCommand(Command):
             normalized_yaml = normalized_yaml.rstrip('\n')
 
             # Reconstruct file
-            updated_content = f"---\n{normalized_yaml}\n---\n{body}"
+            return f"---\n{normalized_yaml}\n---\n{body}"
 
-            # Write back if not dry run
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
+        success = atomic_update(file_path, updater, dry_run=dry_run, silent=True)
 
-            return True, changes
-
-        except Exception as e:
-            return False, [f"Error: {e}"]
+        if error_msg:
+            return False, [error_msg]
+        elif not success and not changes:
+            return True, []
+        else:
+            return success, changes
 
     def _process_directory(self, directory: Path, vault_root: Path, dry_run: bool = False) -> Dict:
         """

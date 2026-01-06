@@ -15,6 +15,7 @@ from . import Command
 from ..common import get_vault_root
 from vault_manager.core.frontmatter import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files, validate_directory
+from vault_manager.core.file_ops import atomic_update
 
 
 class DeduplicateCommand(Command):
@@ -132,38 +133,32 @@ class DeduplicateCommand(Command):
         Returns:
             Tuple of (success, list_of_duplicates_removed)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        duplicates = []
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal duplicates
 
             # Extract frontmatter (need raw text for duplicate detection)
             from ..common import extract_frontmatter
             frontmatter_text, body = extract_frontmatter(content)
 
             if frontmatter_text is None:
-                return True, []
+                return None
 
             # Deduplicate frontmatter (returns dict or None)
-            deduplicated_dict, duplicates = self._deduplicate_frontmatter(frontmatter_text)
+            deduplicated_dict, dups = self._deduplicate_frontmatter(frontmatter_text)
 
             # If no duplicates found, skip
-            if not duplicates:
-                return True, []
+            if not dups:
+                return None
+
+            duplicates = dups
 
             # Serialize back to markdown using FrontmatterManager
-            updated_content = FrontmatterManager.serialize(deduplicated_dict, body)
+            return FrontmatterManager.serialize(deduplicated_dict, body)
 
-            # Write back if not dry run
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
-
-            return True, duplicates
-
-        except Exception as e:
-            print(f"  Error processing {file_path}: {e}")
-            return False, []
+        success = atomic_update(file_path, updater, dry_run=dry_run)
+        return success, duplicates
 
     def _process_directory(self, directory: Path, vault_root: Path, dry_run: bool = False) -> Dict:
         """

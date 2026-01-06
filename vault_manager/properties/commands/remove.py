@@ -8,12 +8,13 @@ from YAML frontmatter across all notes in a directory.
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional
 
 from . import Command
 from ..common import get_vault_root
 from vault_manager.core.frontmatter import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.file_ops import atomic_update
 
 
 class RemoveCommand(Command):
@@ -102,29 +103,24 @@ class RemoveCommand(Command):
             - success: True if operation completed without errors
             - was_changed: True if the property was found and removed
         """
-        try:
-            # Read file
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        was_removed = False
+
+        def updater(content: str) -> Optional[str]:
+            nonlocal was_removed
 
             # Remove property using FrontmatterManager
-            updated_content, was_removed = FrontmatterManager.remove_property(
+            updated_content, removed = FrontmatterManager.remove_property(
                 content, property_name
             )
 
-            if not was_removed:
-                return True, False
+            if not removed:
+                return None
 
-            # Write back if not dry run
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
+            was_removed = True
+            return updated_content
 
-            return True, True
-
-        except Exception as e:
-            print(f"  Error processing {file_path}: {e}")
-            return False, False
+        success = atomic_update(file_path, updater, dry_run=dry_run)
+        return success, was_removed
 
     def _process_directory(self, directory: Path, vault_root: Path,
                           property_name: str, dry_run: bool = False) -> Dict:
