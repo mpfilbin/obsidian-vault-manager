@@ -8,7 +8,7 @@ use these utilities instead of implementing their own file I/O.
 
 import sys
 from pathlib import Path
-from typing import Optional, Callable, Any
+from typing import Optional, Callable
 
 
 class FileOperationError(Exception):
@@ -182,9 +182,9 @@ def atomic_update(
         ...     if '# Title' not in content:
         ...         return None  # Skip this file
         ...     return content.replace('old', 'new')
-        >>>
+
         >>> success = atomic_update(Path('note.md'), update_if_valid)
-        >>>
+
         >>> # Dry-run mode
         >>> success = atomic_update(Path('note.md'), add_line, dry_run=True)
     """
@@ -249,7 +249,7 @@ def safe_move(
         >>> from pathlib import Path
         >>> # Move file
         >>> success = safe_move(Path('old.md'), Path('.trash/old.md'))
-        >>>
+
         >>> # Dry-run
         >>> success = safe_move(Path('old.md'), Path('new.md'), dry_run=True)
     """

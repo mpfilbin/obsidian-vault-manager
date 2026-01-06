@@ -9,13 +9,11 @@ Tests safe file I/O operations including:
 """
 
 import pytest
-from pathlib import Path
 from vault_manager.core.file_ops import (
     safe_read,
     safe_write,
     atomic_update,
     safe_move,
-    FileOperationError,
 )
 
 
