@@ -32,7 +32,6 @@ install-dev:
 install-test:
 	cd .. && pip install -e ".[test]"
 
-# Test targets (run from Library directory)
 test:
 	pytest -v
 
@@ -50,8 +49,6 @@ test-coverage:
 test-watch:
 	pytest-watch
 
-test-quick:
-	pytest -x --ff -m "not slow"
 
 # Quality targets
 lint:

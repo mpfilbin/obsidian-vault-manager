@@ -88,44 +88,47 @@ def vault_database(temp_vault):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY,
-            value TEXT
+            value TEXT NOT NULL
         )
     """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS files (
-            path TEXT PRIMARY KEY,
-            size INTEGER,
-            extension TEXT,
-            mtime REAL
+            file_path TEXT PRIMARY KEY,
+            size_bytes INTEGER NOT NULL,
+            content_hash TEXT,
+            last_modified TEXT NOT NULL,
+            created TEXT,
+            has_frontmatter INTEGER DEFAULT 0
         )
     """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tags (
-            tag TEXT PRIMARY KEY,
-            file_count INTEGER DEFAULT 0
+            tag TEXT PRIMARY KEY
         )
     """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS file_tags (
-            file_path TEXT,
-            tag TEXT,
-            FOREIGN KEY (file_path) REFERENCES files(path),
-            FOREIGN KEY (tag) REFERENCES tags(tag)
+            tag TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            PRIMARY KEY (tag, file_path),
+            FOREIGN KEY (tag) REFERENCES tags(tag) ON DELETE CASCADE,
+            FOREIGN KEY (file_path) REFERENCES files(file_path) ON DELETE CASCADE
         )
     """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS links (
-            source_file TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_file TEXT NOT NULL,
             target_file TEXT,
+            link_type TEXT NOT NULL,
             link_text TEXT,
-            link_type TEXT,
-            is_resolved INTEGER DEFAULT 1,
             line_number INTEGER,
-            FOREIGN KEY (source_file) REFERENCES files(path)
+            FOREIGN KEY (source_file) REFERENCES files(file_path) ON DELETE CASCADE,
+            FOREIGN KEY (target_file) REFERENCES files(file_path) ON DELETE SET NULL
         )
     """)
 
@@ -148,21 +151,21 @@ def populated_database(vault_database):
 
     # Insert sample tags
     tags_data = [
-        ('software-architecture', 45),
-        ('software-development', 38),
-        ('security', 25),
-        ('design-principles', 20),
-        ('algorithms', 15),
+        ('software-architecture',),
+        ('software-development',),
+        ('security',),
+        ('design-principles',),
+        ('algorithms',),
     ]
-    cursor.executemany("INSERT INTO tags (tag, file_count) VALUES (?, ?)", tags_data)
+    cursor.executemany("INSERT INTO tags (tag) VALUES (?)", tags_data)
 
     # Insert sample files
     files_data = [
-        ('SOLID Principles.md', 1024, '.md', 1234567890.0),
-        ('Clean Code.md', 2048, '.md', 1234567891.0),
-        ('Security Best Practices.md', 1536, '.md', 1234567892.0),
+        ('SOLID Principles.md', 1024, '2009-02-13T23:31:30', 'abc123'),
+        ('Clean Code.md', 2048, '2009-02-13T23:31:31', 'def456'),
+        ('Security Best Practices.md', 1536, '2009-02-13T23:31:32', 'ghi789'),
     ]
-    cursor.executemany("INSERT INTO files (path, size, extension, mtime) VALUES (?, ?, ?, ?)", files_data)
+    cursor.executemany("INSERT INTO files (file_path, size_bytes, last_modified, content_hash) VALUES (?, ?, ?, ?)", files_data)
 
     # Insert file-tag relationships
     file_tags_data = [
