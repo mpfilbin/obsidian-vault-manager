@@ -15,6 +15,7 @@ from vault_manager.core.command import Command
 from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.file_ops import atomic_update
+from vault_manager.core.database import rebuild_if_needed
 
 
 class RenameCommand(Command):
@@ -96,15 +97,7 @@ class RenameCommand(Command):
 
             # Rebuild the database
             if stats['files_modified'] > 0:
-                if args.no_rebuild:
-                    print(f"\n{'='*60}")
-                    print("⚠ Database Rebuild Skipped")
-                    print(f"{'='*60}")
-                    print("\nThe vault.db database was NOT updated.")
-                    print("To update the database, run: vault index build")
-                    print(f"{'='*60}")
-                else:
-                    self._rebuild_database()
+                rebuild_if_needed(skip=args.no_rebuild)
         else:
             print("\nTo apply these changes, run the command without --dry-run flag.")
 
@@ -359,7 +352,3 @@ class RenameCommand(Command):
 
         print(f"\n{'='*60}")
 
-    def _rebuild_database(self) -> None:
-        """Rebuild the vault index database after renaming tags."""
-        from vault_manager.core.database import rebuild_vault_database
-        rebuild_vault_database()

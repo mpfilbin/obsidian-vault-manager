@@ -8,6 +8,8 @@ particularly for rebuilding the vault index database.
 
 import sys
 from argparse import Namespace
+from typing import Optional
+from functools import wraps
 
 
 def rebuild_vault_database(silent: bool = False, verbose: bool = False) -> bool:
@@ -146,3 +148,100 @@ def require_database(vault_root, command_name: str = "this command") -> None:
         print(f"\nError: vault.db not found.")
         print(f"Run 'vault tags update' or 'vault index build' before using {command_name}.")
         sys.exit(1)
+
+
+def rebuild_if_needed(
+    skip: bool = False,
+    message: Optional[str] = None,
+    silent: bool = False
+) -> bool:
+    """
+    Rebuild database with optional skip.
+
+    This function provides a standardized way for commands to handle
+    database rebuilding after making changes to files. It supports
+    skipping the rebuild (e.g., when using --no-rebuild flag) with
+    a helpful message to the user.
+
+    Args:
+        skip: If True, skip rebuild and show message
+        message: Custom message to show when skipping (default: standard message)
+        silent: Suppress all output
+
+    Returns:
+        True if rebuilt or skipped, False if rebuild failed
+
+    Examples:
+        >> # Normal rebuild
+        >> rebuild_if_needed()
+
+        >> # Skip rebuild (with --no-rebuild flag)
+        >> rebuild_if_needed(skip=args.no_rebuild)
+
+        >> # Custom skip message
+        >> rebuild_if_needed(
+        ...     skip=args.no_rebuild,
+        ...     message="Database not updated. Run 'vault tags update' to sync."
+        ... )
+    """
+    if skip:
+        if not silent:
+            print("\n" + "=" * 60)
+            print("⚠ Database Rebuild Skipped")
+            print("=" * 60)
+
+            if message:
+                print(f"\n{message}")
+            else:
+                print("\nThe vault.db database was NOT updated.")
+                print("To update the database, run: vault index build")
+
+        return True
+
+    return rebuild_vault_database(silent=silent)
+
+
+def auto_rebuild_after(operation_name: str):
+    """
+    Decorator to auto-rebuild database after command execution.
+
+    This decorator wraps command execute methods to automatically
+    rebuild the database after the command completes, unless the
+    --no-rebuild flag is set.
+
+    Args:
+        operation_name: Name of the operation (for logging/debugging)
+
+    Returns:
+        Decorated function that rebuilds database after execution
+
+    Examples:
+        >> from vault_manager.core.database import auto_rebuild_after
+        >> from vault_manager.core.command import Command
+        >>
+        >> class PurgeCommand(Command):
+        ...     @auto_rebuild_after("tag purge")
+        ...     def execute(self, args):
+        ...         # Remove tags from files
+        ...         ...
+        ...         # Database will be auto-rebuilt after this returns
+
+        >> class RenameCommand(Command):
+        ...     @auto_rebuild_after("tag rename")
+        ...     def execute(self, args):
+        ...         # Rename tags in files
+        ...         ...
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, args):
+            # Execute the command
+            result = func(self, args)
+
+            # Rebuild database after command completes
+            skip_rebuild = getattr(args, 'no_rebuild', False)
+            rebuild_if_needed(skip=skip_rebuild)
+
+            return result
+        return wrapper
+    return decorator
