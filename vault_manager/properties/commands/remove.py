@@ -8,13 +8,14 @@ from YAML frontmatter across all notes in a directory.
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Tuple, Dict, Optional
+from typing import Tuple, Optional
 
 from . import Command
 from ..common import get_vault_root
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 from vault_manager.core.file_ops import atomic_update
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class RemoveCommand(Command):
@@ -75,16 +76,22 @@ class RemoveCommand(Command):
         print(f"Ignored directories: .obsidian, .trash, Excalidraw, Calendar")
         print(f"Ignored file types: .excalidraw.md")
 
-        # Process directory
-        stats = self._process_directory(target_dir, vault_root, property_name, args.dry_run)
+        # Process directory with DryRunContext
+        with DryRunContext(args.dry_run) as ctx:
+            self._process_directory(target_dir, vault_root, property_name, ctx)
 
-        # Print summary
-        self._print_summary(stats, property_name, args.dry_run)
+            # Print summary
+            print_dry_run_summary(
+                ctx,
+                additional_info=f"Property removed: '{property_name}'"
+            )
 
-        if not args.dry_run and stats['files_changed'] > 0:
-            print(f"\nDone! Modified {stats['files_changed']} file{'s' if stats['files_changed'] != 1 else ''}.")
-        elif args.dry_run and stats['files_changed'] > 0:
-            print(f"\nDry run complete. {stats['files_changed']} file{'s' if stats['files_changed'] != 1 else ''} would be modified.")
+        # Final message
+        if ctx.stats.files_modified > 0:
+            if not args.dry_run:
+                print(f"\nDone! Modified {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''}.")
+            else:
+                print(f"\nDry run complete. {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''} would be modified.")
         else:
             print(f"\nNo files contain the property '{property_name}'.")
 
@@ -122,8 +129,13 @@ class RemoveCommand(Command):
         success = atomic_update(file_path, updater, dry_run=dry_run)
         return success, was_removed
 
-    def _process_directory(self, directory: Path, vault_root: Path,
-                          property_name: str, dry_run: bool = False) -> Dict:
+    def _process_directory(
+        self,
+        directory: Path,
+        vault_root: Path,
+        property_name: str,
+        ctx: DryRunContext
+    ) -> None:
         """
         Process all markdown files in a directory.
 
@@ -131,55 +143,26 @@ class RemoveCommand(Command):
             directory: Directory to process
             vault_root: Root directory of the vault
             property_name: Property to remove
-            dry_run: If True, preview changes without modifying files
-
-        Returns:
-            Dictionary with statistics
+            ctx: DryRunContext for tracking operations
         """
-        stats = {
-            'total_files': 0,
-            'files_with_frontmatter': 0,
-            'files_with_property': 0,
-            'files_changed': 0,
-            'files_failed': 0,
-            'files_skipped': 0
-        }
-
-        print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
+        print(f"\n{'DRY RUN - ' if ctx.dry_run else ''}Processing markdown files...")
 
         # Use iter_markdown_files for memory-efficient traversal
         additional_ignores = {'Excalidraw', 'Calendar'}
         for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
-            stats['total_files'] += 1
+            ctx.stats.increment('total_files')
             relative_path = str(file_path.relative_to(vault_root))
 
             success, was_changed = self._update_file_frontmatter(
-                file_path, property_name, dry_run
+                file_path, property_name, ctx.dry_run
             )
 
             if not success:
-                stats['files_failed'] += 1
+                ctx.stats.increment('files_failed')
                 print(f"  ✗ Failed: {relative_path}")
             elif was_changed:
-                stats['files_changed'] += 1
-                stats['files_with_property'] += 1
-                mode = "Would remove" if dry_run else "Removed"
+                ctx.stats.increment('files_modified')
+                ctx.stats.increment('files_with_property')
+                ctx.record_change(file_path, f"Removed property '{property_name}'")
+                mode = "Would remove" if ctx.dry_run else "Removed"
                 print(f"  ✓ {mode} '{property_name}': {relative_path}")
-
-        return stats
-
-    def _print_summary(self, stats: Dict, property_name: str, dry_run: bool = False) -> None:
-        """Print summary of processing results."""
-        print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
-        print("=" * 60)
-        print(f"Total markdown files: {stats['total_files']}")
-        print(f"Files with property '{property_name}': {stats['files_with_property']}")
-        print(f"Files modified: {stats['files_changed']}")
-        print(f"Files failed: {stats['files_failed']}")
-
-        if dry_run and stats['files_changed'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)
