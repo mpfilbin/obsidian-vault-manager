@@ -531,3 +531,163 @@ def test_remove_property_parametrized(content, property, should_remove):
     """Parametrized test for remove_property."""
     updated, removed = FrontmatterManager.remove_property(content, property)
     assert removed == should_remove
+
+
+@pytest.mark.unit
+class TestIsSensitiveNote:
+    """Test is_sensitive_note method for detecting sensitive notes."""
+
+    def test_sensitive_true_lowercase(self):
+        """Test detecting sensitive: true (lowercase)."""
+        content = "---\nsensitive: true\n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is True
+
+    def test_sensitive_true_capitalized(self):
+        """Test detecting sensitive: True (capitalized)."""
+        content = "---\nsensitive: True\n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is True
+
+    def test_sensitive_true_uppercase(self):
+        """Test detecting sensitive: TRUE (uppercase)."""
+        content = "---\nsensitive: TRUE\n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is True
+
+    def test_sensitive_yes_lowercase(self):
+        """Test detecting sensitive: yes."""
+        content = "---\nsensitive: yes\n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is True
+
+    def test_sensitive_yes_capitalized(self):
+        """Test detecting sensitive: Yes."""
+        content = "---\nsensitive: Yes\n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is True
+
+    def test_sensitive_yes_uppercase(self):
+        """Test detecting sensitive: YES."""
+        content = "---\nsensitive: YES\n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is True
+
+    def test_sensitive_false(self):
+        """Test that sensitive: false is not detected as sensitive."""
+        content = "---\nsensitive: false\n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is False
+
+    def test_no_sensitive_property(self):
+        """Test that notes without sensitive property are not sensitive."""
+        content = "---\ntitle: Test\n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is False
+
+    def test_no_frontmatter(self):
+        """Test that notes without frontmatter are not sensitive."""
+        content = "# Just content"
+        assert FrontmatterManager.is_sensitive_note(content) is False
+
+    def test_sensitive_with_spaces(self):
+        """Test detecting sensitive with extra spaces."""
+        content = "---\nsensitive:   true  \n---\n# Content"
+        assert FrontmatterManager.is_sensitive_note(content) is True
+
+
+@pytest.mark.unit
+class TestExtractEdgeCases:
+    """Test edge cases in extract method."""
+
+    def test_extract_non_dict_yaml(self):
+        """Test extracting frontmatter that parses to non-dict (e.g., string)."""
+        # YAML that parses to a string instead of a dict
+        content = "---\njust a string\n---\n# Content"
+        fm_dict, body = FrontmatterManager.extract(content)
+        assert fm_dict is None
+        assert "# Content" in body
+
+    def test_extract_empty_yaml_parses_to_none(self):
+        """Test extracting truly empty frontmatter that parses to None."""
+        # Empty frontmatter (just whitespace) parses to None in YAML
+        content = "---\n\n---\n# Content"
+        fm_dict, body = FrontmatterManager.extract(content)
+        assert fm_dict == {}
+        assert "# Content" in body
+
+
+@pytest.mark.unit
+class TestExtractTagsEdgeCases:
+    """Test edge cases in extract_tags_from_frontmatter method."""
+
+    def test_tags_followed_by_another_property(self):
+        """Test extracting tags when followed immediately by another property."""
+        content = """---
+title: Test
+tags:
+  - tag1
+  - tag2
+author: John
+---
+# Content"""
+        tags = FrontmatterManager.extract_tags_from_frontmatter(content)
+        assert "tag1" in tags
+        assert "tag2" in tags
+        assert len(tags) == 2
+
+    def test_tags_with_hash_prefix(self):
+        """Test that tags with # prefix have it removed."""
+        content = """---
+tags:
+  - #tag1
+  - #tag2
+---
+# Content"""
+        tags = FrontmatterManager.extract_tags_from_frontmatter(content)
+        assert "tag1" in tags
+        assert "tag2" in tags
+        # Ensure # was removed
+        assert "#tag1" not in tags
+        assert "#tag2" not in tags
+
+
+@pytest.mark.unit
+class TestNeedsQuotingEdgeCases:
+    """Test edge cases in needs_quoting method."""
+
+    def test_value_starting_with_dash(self):
+        """Test that values starting with - need quoting."""
+        assert FrontmatterManager.needs_quoting('-value') is True
+
+    def test_value_starting_with_question(self):
+        """Test that values starting with ? need quoting."""
+        assert FrontmatterManager.needs_quoting('?value') is True
+
+    def test_value_starting_with_hash(self):
+        """Test that values starting with # need quoting."""
+        assert FrontmatterManager.needs_quoting('#value') is True
+
+    def test_value_starting_with_ampersand(self):
+        """Test that values starting with & need quoting."""
+        assert FrontmatterManager.needs_quoting('&value') is True
+
+    def test_value_starting_with_asterisk(self):
+        """Test that values starting with * need quoting."""
+        assert FrontmatterManager.needs_quoting('*value') is True
+
+    def test_value_starting_with_exclamation(self):
+        """Test that values starting with ! need quoting."""
+        assert FrontmatterManager.needs_quoting('!value') is True
+
+    def test_value_starting_with_pipe(self):
+        """Test that values starting with | need quoting."""
+        assert FrontmatterManager.needs_quoting('|value') is True
+
+    def test_value_starting_with_greater_than(self):
+        """Test that values starting with > need quoting."""
+        assert FrontmatterManager.needs_quoting('>value') is True
+
+    def test_value_starting_with_percent(self):
+        """Test that values starting with % need quoting."""
+        assert FrontmatterManager.needs_quoting('%value') is True
+
+    def test_value_starting_with_at(self):
+        """Test that values starting with @ need quoting."""
+        assert FrontmatterManager.needs_quoting('@value') is True
+
+    def test_value_starting_with_backtick(self):
+        """Test that values starting with ` need quoting."""
+        assert FrontmatterManager.needs_quoting('`value') is True
