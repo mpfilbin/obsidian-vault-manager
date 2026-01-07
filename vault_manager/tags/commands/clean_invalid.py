@@ -13,7 +13,7 @@ from typing import Dict, List, Tuple, Optional
 
 from . import Command
 from ..common import get_vault_root
-from vault_manager.core.frontmatter import FrontmatterManager, is_valid_obsidian_tag
+from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 from vault_manager.core.file_ops import atomic_update
 
@@ -112,7 +112,7 @@ class CleanInvalidCommand(Command):
 
         for tag in tags:
             tag_str = str(tag).strip()
-            if is_valid_obsidian_tag(tag_str):
+            if FrontmatterManager.is_valid_obsidian_tag(tag_str):
                 valid_tags.append(tag_str)
             else:
                 removed_tags.append(tag_str)

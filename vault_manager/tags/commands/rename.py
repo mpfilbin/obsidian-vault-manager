@@ -13,7 +13,7 @@ from typing import Dict, Tuple, Optional
 
 from vault_manager.core.command import Command
 from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
-from vault_manager.core.frontmatter import is_valid_obsidian_tag, FrontmatterManager
+from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.file_ops import atomic_update
 
 
@@ -50,7 +50,7 @@ class RenameCommand(Command):
         dry_run = args.dry_run
 
         # Validate new tag name
-        if not is_valid_obsidian_tag(new_tag):
+        if not FrontmatterManager.is_valid_obsidian_tag(new_tag):
             print(f"\nError: '{new_tag}' is not a valid Obsidian tag.")
             print("\nTag requirements:")
             print("  - Only letters, numbers, underscore (_), hyphen (-), slash (/)")

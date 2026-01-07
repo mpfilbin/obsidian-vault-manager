@@ -33,13 +33,13 @@ install-test:
 	cd .. && pip install -e ".[test]"
 
 test:
-	pytest -v
+	pytest -v --no-cov
 
 test-unit:
-	pytest -v -m unit
+	pytest -v -m unit --no-cov
 
 test-bdd:
-	pytest -v -m bdd
+	pytest -v -m bdd --no-cov
 
 test-coverage:
 	pytest --cov=. --cov-report=html --cov-report=term-missing

@@ -6,7 +6,6 @@ and extracts metadata needed for database population.
 """
 
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -18,6 +17,7 @@ from .common import (
     compute_file_hash,
     format_timestamp
 )
+from vault_manager.core.frontmatter_manager import FrontmatterManager
 
 
 @dataclass
@@ -210,64 +210,5 @@ class FileScanner:
 
         Returns:
             List of tags found in frontmatter
-
-        Note:
-            Reuses logic from Library/tags/common.py for compatibility
         """
-        # Match YAML frontmatter between --- delimiters
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if not match:
-            return []
-
-        frontmatter_text = match.group(1)
-        tags = []
-
-        # Parse YAML to extract tags
-        lines = frontmatter_text.split('\n')
-        i = 0
-
-        while i < len(lines):
-            line = lines[i]
-
-            # Check for tags field
-            if line.strip().startswith('tags:'):
-                tags_value = line.split('tags:', 1)[1].strip()
-
-                # Handle inline array format: tags: [tag1, tag2]
-                if tags_value.startswith('[') and tags_value.endswith(']'):
-                    tags_str = tags_value[1:-1]
-                    inline_tags = [t.strip().strip('"').strip("'") for t in tags_str.split(',')]
-                    tags.extend([t for t in inline_tags if t])
-                    break
-
-                # Check next lines for list items
-                i += 1
-                while i < len(lines):
-                    next_line = lines[i].strip()
-
-                    # If we hit a line that starts a new field
-                    if next_line and not next_line.startswith('-') and ':' in next_line and not next_line.startswith(' '):
-                        i -= 1
-                        break
-
-                    # If it's a tag item
-                    if next_line.startswith('-'):
-                        tag = next_line[1:].strip().strip('"').strip("'")
-                        if tag:
-                            tags.append(tag)
-                    elif not next_line:
-                        pass
-                    elif next_line.startswith(' '):
-                        pass
-                    else:
-                        i -= 1
-                        break
-
-                    i += 1
-                break
-
-            i += 1
-
-        return tags
+        return FrontmatterManager.extract_tags_from_frontmatter(content)

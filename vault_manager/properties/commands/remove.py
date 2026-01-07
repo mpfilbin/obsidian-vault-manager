@@ -12,7 +12,7 @@ from typing import Tuple, Dict, Optional
 
 from . import Command
 from ..common import get_vault_root
-from vault_manager.core.frontmatter import FrontmatterManager
+from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 from vault_manager.core.file_ops import atomic_update
 

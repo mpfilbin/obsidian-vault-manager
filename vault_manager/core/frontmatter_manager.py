@@ -1,0 +1,568 @@
+"""
+Frontmatter and YAML utilities for Obsidian markdown files.
+
+This module provides the FrontmatterManager class for extracting, parsing, and
+manipulating YAML frontmatter in markdown files, as well as tag-specific operations.
+"""
+
+import re
+import yaml
+from typing import Optional, Tuple, List, Dict, Any
+
+
+class FrontmatterManager:
+    """
+    Centralized manager for YAML frontmatter operations.
+
+    This class provides high-level operations for working with YAML frontmatter
+    in markdown files, eliminating the need for commands to manually parse and
+    serialize YAML.
+
+    All methods handle edge cases like:
+    - Files without frontmatter
+    - Empty frontmatter
+    - Malformed YAML
+    - Line ending normalization
+
+    Examples:
+        >> content = "---\\ntitle: Test\\n---\\n# Content"
+        >>
+        >> # Update a property
+        >> updated = FrontmatterManager.update_property(content, 'status', 'draft')
+        >>
+        >> # Remove a property
+        >> updated = FrontmatterManager.remove_property(content, 'author')
+        >>
+        >> # Bulk update
+        >> updated = FrontmatterManager.bulk_update(content, {'status': 'draft', 'priority': 'high'})
+    """
+
+    @staticmethod
+    def extract_frontmatter(content: str) -> Tuple[Optional[str], str]:
+        """
+        Extract YAML frontmatter from markdown content.
+
+        Args:
+            content: Full markdown file content
+
+        Returns:
+            Tuple of (frontmatter, body)
+            - frontmatter: YAML content without --- delimiters, or None if not found
+            - body: Markdown content after frontmatter
+
+        Examples:
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> fm, body = FrontmatterManager.extract_frontmatter(content)
+            >> fm
+            'title: Test'
+            >> body
+            '# Hello'
+
+        Note:
+            Handles both Unix (\\n) and Windows (\\r\\n) line endings by normalizing
+            to Unix-style before processing.
+        """
+        # Normalize line endings to Unix-style for cross-platform compatibility
+        # This ensures the regex works correctly on Windows, macOS, Linux, and Android
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+
+        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
+        match = re.match(frontmatter_pattern, content, re.DOTALL)
+
+        if not match:
+            return None, content
+
+        frontmatter = match.group(1)
+        body = content[match.end():]
+
+        return frontmatter, body
+
+    @staticmethod
+    def extract_tags_from_frontmatter(content: str) -> List[str]:
+        """
+        Extract tags from YAML frontmatter.
+
+        Handles both inline array format and list format:
+        - Inline: tags: [foo, bar]
+        - List:   tags:\\n  - foo\\n  - bar
+
+        Args:
+            content: Full markdown content with frontmatter
+
+        Returns:
+            List of tags (without # prefix), sorted alphabetically
+
+        Examples:
+            >> content = "---\\ntags:\\n  - foo\\n  - bar\\n---\\nContent"
+            >> FrontmatterManager.extract_tags_from_frontmatter(content)
+            ['bar', 'foo']
+            >> content = "---\\ntags: [baz, qux]\\n---\\nContent"
+            >> FrontmatterManager.extract_tags_from_frontmatter(content)
+            ['baz', 'qux']
+        """
+        frontmatter, _ = FrontmatterManager.extract_frontmatter(content)
+
+        if not frontmatter:
+            return []
+
+        tags = set()
+        lines = frontmatter.split('\n')
+        i = 0
+
+        while i < len(lines):
+            line = lines[i]
+
+            if line.strip().startswith('tags:'):
+                tags_value = line.split('tags:', 1)[1].strip()
+
+                # Handle inline array format: tags: [foo, bar]
+                if tags_value.startswith('[') and tags_value.endswith(']'):
+                    tags_str = tags_value[1:-1]
+                    inline_tags = [t.strip().strip('"').strip("'") for t in tags_str.split(',')]
+                    tags.update([t for t in inline_tags if t])
+                    break
+
+                # Handle list format
+                i += 1
+                while i < len(lines):
+                    next_line = lines[i].strip()
+
+                    # Stop at next property or end
+                    if next_line and not next_line.startswith('-') and ':' in next_line:
+                        i -= 1
+                        break
+
+                    if next_line.startswith('-'):
+                        tag = next_line[1:].strip().strip('"').strip("'")
+                        # Remove # prefix if present (shouldn't be, but handle it)
+                        if tag.startswith('#'):
+                            tag = tag[1:]
+                        if tag:
+                            tags.add(tag)
+
+                    i += 1
+                break
+
+            i += 1
+
+        return sorted(tags)
+
+    @staticmethod
+    def needs_quoting(value: str) -> bool:
+        """
+        Check if a YAML value needs quoting.
+
+        Args:
+            value: String value to check
+
+        Returns:
+            True if value should be quoted in YAML
+
+        Examples:
+            >> FrontmatterManager.needs_quoting('simple')
+            False
+            >> FrontmatterManager.needs_quoting('2024')
+            True
+            >> FrontmatterManager.needs_quoting('has:colon')
+            True
+        """
+        if not value:
+            return True
+
+        # Values starting with special YAML characters
+        if value[0] in {'-', '?', ':', '#', '&', '*', '!', '|', '>', '%', '@', '`'}:
+            return True
+
+        # Values containing special characters
+        if any(char in value for char in {':', '{', '}', '[', ']', ',', '&', '*', '#', '?', '|', '-', '<', '>', '=', '!', '%', '@'}):
+            return True
+
+        # Numeric values
+        if value.isdigit() or value.replace('.', '', 1).isdigit():
+            return True
+
+        # Boolean-like values
+        if value.lower() in {'true', 'false', 'yes', 'no', 'on', 'off'}:
+            return True
+
+        return False
+
+    @staticmethod
+    def format_tag_name(tag: str) -> str:
+        """
+        Format tag name for YAML output (with quoting if needed).
+
+        Args:
+            tag: Tag name (without # prefix)
+
+        Returns:
+            Formatted tag name (quoted if necessary)
+
+        Examples:
+            >> FrontmatterManager.format_tag_name('software-development')
+            'software-development'
+            >> FrontmatterManager.format_tag_name('2024')
+            '"2024"'
+        """
+        if FrontmatterManager.needs_quoting(tag):
+            return f'"{tag}"'
+        return tag
+
+    @staticmethod
+    def is_valid_obsidian_tag(tag: str) -> bool:
+        """
+        Validate tag against Obsidian's tag rules.
+
+        Obsidian tag rules:
+        - Must contain only: letters, numbers, underscore (_), hyphen (-), slash (/)
+        - Must contain at least one letter or underscore (cannot be all numeric)
+        - Cannot be empty
+
+        Args:
+            tag: Tag to validate (without # prefix)
+
+        Returns:
+            True if tag is valid
+
+        Examples:
+            >> FrontmatterManager.is_valid_obsidian_tag("software-development")
+            True
+            >> FrontmatterManager.is_valid_obsidian_tag("2024")
+            False
+            >> FrontmatterManager.is_valid_obsidian_tag("y2024")
+            True
+            >> FrontmatterManager.is_valid_obsidian_tag("nested/tag")
+            True
+        """
+        if not tag:
+            return False
+
+        # Check for valid characters only
+        if not re.match(r'^[a-zA-Z0-9_/-]+$', tag):
+            return False
+
+        # Must contain at least one letter or underscore
+        has_letter_or_underscore = any(c.isalpha() or c == '_' for c in tag)
+
+        return has_letter_or_underscore
+
+    @staticmethod
+    def is_sensitive_note(content: str) -> bool:
+        """
+        Check if a note is marked as sensitive in its frontmatter.
+
+        Checks for 'sensitive: true' property in YAML frontmatter. Notes marked
+        as sensitive will be skipped by AI-powered features (tag generation,
+        summarization) to prevent sending sensitive content to external APIs.
+
+        Args:
+            content: Full markdown content with frontmatter
+
+        Returns:
+            True if note has sensitive: true in frontmatter, False otherwise
+
+        Examples:
+            >> content = "---\\nsensitive: true\\n---\\nSecret content"
+            >> FrontmatterManager.is_sensitive_note(content)
+            True
+            >> content = "---\\nsensitive: false\\n---\\nPublic content"
+            >> FrontmatterManager.is_sensitive_note(content)
+            False
+            >> content = "---\\ntags: [foo]\\n---\\nNormal content"
+            >> FrontmatterManager.is_sensitive_note(content)
+            False
+        """
+        frontmatter, _ = FrontmatterManager.extract_frontmatter(content)
+
+        if not frontmatter:
+            return False
+
+        # Look for sensitive property with true value
+        # Match variations: sensitive: true, sensitive: True, sensitive: "true", etc.
+        sensitive_pattern = r'^sensitive:\s*(?:true|True|TRUE|yes|Yes|YES)\s*$'
+
+        for line in frontmatter.split('\n'):
+            if re.match(sensitive_pattern, line.strip()):
+                return True
+
+        return False
+
+    @staticmethod
+    def extract(content: str) -> Tuple[Optional[Dict[str, Any]], str]:
+        """
+        Extract and parse frontmatter in one step.
+
+        Args:
+            content: Full markdown file content
+
+        Returns:
+            Tuple of (frontmatter_dict, body)
+            - frontmatter_dict: Parsed YAML as dictionary, or None if not found
+            - body: Markdown content after frontmatter
+
+        Examples:
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> fm_dict, body = FrontmatterManager.extract(content)
+            >> fm_dict
+            {'title': 'Test'}
+            >> body
+            '# Hello'
+        """
+        frontmatter_text, body = FrontmatterManager.extract_frontmatter(content)
+
+        if frontmatter_text is None:
+            return None, body
+
+        try:
+            frontmatter_dict = yaml.safe_load(frontmatter_text)
+            # Handle empty frontmatter (parses as None)
+            if frontmatter_dict is None:
+                return {}, body
+            # Ensure it's a dictionary
+            if not isinstance(frontmatter_dict, dict):
+                return None, body
+            return frontmatter_dict, body
+        except yaml.YAMLError:
+            # Malformed YAML - return None
+            return None, body
+
+    @staticmethod
+    def serialize(frontmatter_dict: Optional[Dict[str, Any]], body: str) -> str:
+        """
+        Serialize frontmatter dict and body back to markdown.
+
+        Args:
+            frontmatter_dict: Dictionary to serialize (or None to remove frontmatter)
+            body: Markdown content
+
+        Returns:
+            Complete markdown content with frontmatter
+
+        Examples:
+            >> fm = {'title': 'Test', 'tags': ['foo', 'bar']}
+            >> content = FrontmatterManager.serialize(fm, '# Hello')
+            >> '---' in content
+            True
+        """
+        # If no frontmatter or empty dict, return body only
+        if not frontmatter_dict:
+            return body
+
+        # Serialize to YAML
+        yaml_text = yaml.dump(
+            frontmatter_dict,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False
+        ).rstrip('\n')
+
+        # Reconstruct content
+        return f"---\n{yaml_text}\n---\n{body}"
+
+    @staticmethod
+    def update_property(content: str, key: str, value: Any) -> Tuple[str, bool]:
+        """
+        Update a single property, creating frontmatter if needed.
+
+        Args:
+            content: Full markdown content
+            key: Property name
+            value: Property value
+
+        Returns:
+            Tuple of (updated_content, was_modified)
+            - updated_content: Modified markdown content
+            - was_modified: True if property was added/changed
+
+        Examples:
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> updated, modified = FrontmatterManager.update_property(content, 'status', 'draft')
+            >> modified
+            True
+            >> 'status: draft' in updated
+            True
+        """
+        frontmatter_dict, body = FrontmatterManager.extract(content)
+
+        # Create frontmatter if it doesn't exist
+        if frontmatter_dict is None:
+            frontmatter_dict = {}
+
+        # Check if value actually changed
+        was_modified = (key not in frontmatter_dict) or (frontmatter_dict.get(key) != value)
+
+        # Set the property
+        frontmatter_dict[key] = value
+
+        # Serialize back
+        updated_content = FrontmatterManager.serialize(frontmatter_dict, body)
+
+        return updated_content, was_modified
+
+    @staticmethod
+    def remove_property(content: str, key: str) -> Tuple[str, bool]:
+        """
+        Remove a property from frontmatter.
+
+        If removing the property leaves frontmatter empty, the entire
+        frontmatter block is removed.
+
+        Args:
+            content: Full markdown content
+            key: Property name to remove
+
+        Returns:
+            Tuple of (updated_content, was_removed)
+            - updated_content: Modified markdown content
+            - was_removed: True if property was found and removed
+
+        Examples:
+            >> content = "---\\ntitle: Test\\nauthor: Me\\n---\\n# Hello"
+            >> updated, removed = FrontmatterManager.remove_property(content, 'author')
+            >> removed
+            True
+            >> 'author' not in updated
+            True
+        """
+        frontmatter_dict, body = FrontmatterManager.extract(content)
+
+        # No frontmatter or key doesn't exist
+        if frontmatter_dict is None or key not in frontmatter_dict:
+            return content, False
+
+        # Remove the property
+        del frontmatter_dict[key]
+
+        # Serialize back (will remove frontmatter if dict is empty)
+        updated_content = FrontmatterManager.serialize(frontmatter_dict, body)
+
+        return updated_content, True
+
+    @staticmethod
+    def bulk_update(content: str, updates: Dict[str, Any]) -> Tuple[str, bool]:
+        """
+        Update multiple properties at once.
+
+        Args:
+            content: Full markdown content
+            updates: Dictionary of property: value pairs to update
+
+        Returns:
+            Tuple of (updated_content, was_modified)
+            - updated_content: Modified markdown content
+            - was_modified: True if any property was added/changed
+
+        Examples:
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> updates = {'status': 'draft', 'priority': 'high'}
+            >> updated, modified = FrontmatterManager.bulk_update(content, updates)
+            >> modified
+            True
+            >> 'status: draft' in updated and 'priority: high' in updated
+            True
+        """
+        frontmatter_dict, body = FrontmatterManager.extract(content)
+
+        # Create frontmatter if it doesn't exist
+        if frontmatter_dict is None:
+            frontmatter_dict = {}
+
+        # Track if anything changed
+        was_modified = False
+
+        # Apply all updates
+        for key, value in updates.items():
+            if (key not in frontmatter_dict) or (frontmatter_dict.get(key) != value):
+                was_modified = True
+            frontmatter_dict[key] = value
+
+        # Serialize back
+        updated_content = FrontmatterManager.serialize(frontmatter_dict, body)
+
+        return updated_content, was_modified
+
+    @staticmethod
+    def has_property(content: str, key: str) -> bool:
+        """
+        Check if frontmatter has a specific property.
+
+        Args:
+            content: Full markdown content
+            key: Property name to check
+
+        Returns:
+            True if property exists in frontmatter
+
+        Examples:
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> FrontmatterManager.has_property(content, 'title')
+            True
+            >> FrontmatterManager.has_property(content, 'author')
+            False
+        """
+        frontmatter_dict, _ = FrontmatterManager.extract(content)
+
+        if frontmatter_dict is None:
+            return False
+
+        return key in frontmatter_dict
+
+    @staticmethod
+    def get_property(content: str, key: str, default: Any = None) -> Any:
+        """
+        Get a property value from frontmatter.
+
+        Args:
+            content: Full markdown content
+            key: Property name
+            default: Default value if property doesn't exist
+
+        Returns:
+            Property value or default
+
+        Examples:
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> FrontmatterManager.get_property(content, 'title')
+            'Test'
+            >> FrontmatterManager.get_property(content, 'author', 'Unknown')
+            'Unknown'
+        """
+        frontmatter_dict, _ = FrontmatterManager.extract(content)
+
+        if frontmatter_dict is None:
+            return default
+
+        return frontmatter_dict.get(key, default)
+
+    @staticmethod
+    def validate_yaml(content: str) -> Tuple[bool, Optional[str]]:
+        """
+        Validate YAML syntax in frontmatter.
+
+        Args:
+            content: Full markdown content
+
+        Returns:
+            Tuple of (is_valid, error_message)
+            - is_valid: True if YAML is valid or no frontmatter
+            - error_message: Error description if invalid, None otherwise
+
+        Examples:
+            >> content = "---\\ntitle: Test\\n---\\n# Hello"
+            >> valid, error = FrontmatterManager.validate_yaml(content)
+            >> valid
+            True
+            >> error is None
+            True
+        """
+        frontmatter_text, _ = FrontmatterManager.extract_frontmatter(content)
+
+        # No frontmatter is valid
+        if frontmatter_text is None:
+            return True, None
+
+        try:
+            yaml.safe_load(frontmatter_text)
+            return True, None
+        except yaml.YAMLError as e:
+            return False, str(e)

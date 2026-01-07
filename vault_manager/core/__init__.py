@@ -22,13 +22,28 @@ from .vault import (
 from .command import Command
 
 # Frontmatter utilities
-from .frontmatter import (
-    extract_frontmatter,
-    extract_tags_from_frontmatter,
-    format_tag_name,
-    is_valid_obsidian_tag,
-    needs_quoting,
-)
+from .frontmatter_manager import FrontmatterManager
+
+# Backward compatibility wrappers for frontmatter functions
+def extract_frontmatter(content: str):
+    """Backward compatibility wrapper for FrontmatterManager.extract_frontmatter()."""
+    return FrontmatterManager.extract_frontmatter(content)
+
+def extract_tags_from_frontmatter(content: str):
+    """Backward compatibility wrapper for FrontmatterManager.extract_tags_from_frontmatter()."""
+    return FrontmatterManager.extract_tags_from_frontmatter(content)
+
+def format_tag_name(tag: str):
+    """Backward compatibility wrapper for FrontmatterManager.format_tag_name()."""
+    return FrontmatterManager.format_tag_name(tag)
+
+def is_valid_obsidian_tag(tag: str):
+    """Backward compatibility wrapper for FrontmatterManager.is_valid_obsidian_tag()."""
+    return FrontmatterManager.is_valid_obsidian_tag(tag)
+
+def needs_quoting(value: str):
+    """Backward compatibility wrapper for FrontmatterManager.needs_quoting()."""
+    return FrontmatterManager.needs_quoting(value)
 
 # Validation utilities
 from .validation import (

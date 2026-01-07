@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 from vault_manager.core.command import Command
 from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
-from vault_manager.core.frontmatter import extract_tags_from_frontmatter, FrontmatterManager
+from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.file_ops import safe_read, atomic_update
 
 
@@ -215,7 +215,7 @@ class SetCommand(Command):
         if content is None:
             return []
 
-        tags = extract_tags_from_frontmatter(content)
+        tags = FrontmatterManager.extract_tags_from_frontmatter(content)
         return tags
 
     def _set_property_in_file(

@@ -18,6 +18,7 @@ from . import Command
 from ..common import get_vault_root, extract_frontmatter
 from vault_manager.index.common import get_database_path
 from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.frontmatter_manager import FrontmatterManager
 
 
 class NoteMetadata:
@@ -170,53 +171,18 @@ class RelateCommand(Command):
             # If there's any database error, return None
             return None
 
-    def _extract_tags_from_frontmatter(self, frontmatter: str) -> Set[str]:
-        """Extract tags from YAML frontmatter."""
-        tags = set()
+    def _extract_tags_from_frontmatter(self, content: str) -> Set[str]:
+        """
+        Extract tags from YAML frontmatter.
 
-        lines = frontmatter.split('\n')
-        i = 0
+        Args:
+            content: Full markdown content with frontmatter
 
-        while i < len(lines):
-            line = lines[i]
-
-            if line.strip().startswith('tags:'):
-                tags_value = line.split('tags:', 1)[1].strip()
-
-                # Handle inline array format
-                if tags_value.startswith('[') and tags_value.endswith(']'):
-                    tags_str = tags_value[1:-1]
-                    inline_tags = [t.strip().strip('"').strip("'") for t in tags_str.split(',')]
-                    tags.update([t for t in inline_tags if t])
-                    break
-
-                # Check next lines for list items
-                i += 1
-                while i < len(lines):
-                    next_line = lines[i].strip()
-
-                    if next_line and not next_line.startswith('-') and ':' in next_line and not next_line.startswith(' '):
-                        i -= 1
-                        break
-
-                    if next_line.startswith('-'):
-                        tag = next_line[1:].strip().strip('"').strip("'")
-                        if tag:
-                            tags.add(tag)
-                    elif not next_line:
-                        pass
-                    elif next_line.startswith(' '):
-                        pass
-                    else:
-                        i -= 1
-                        break
-
-                    i += 1
-                break
-
-            i += 1
-
-        return tags
+        Returns:
+            Set of tags found in frontmatter
+        """
+        tags_list = FrontmatterManager.extract_tags_from_frontmatter(content)
+        return set(tags_list)
 
     def _extract_wiki_links(self, content: str) -> Set[str]:
         """Extract wiki-links from markdown content."""
@@ -279,7 +245,7 @@ class RelateCommand(Command):
                     continue
 
                 note = NoteMetadata(file_path, relative_path)
-                note.tags = self._extract_tags_from_frontmatter(frontmatter)
+                note.tags = self._extract_tags_from_frontmatter(content)
                 note.links = self._extract_wiki_links(body)
                 note.title = file_path.name
                 note.title_words = self._extract_title_words(file_path.name)

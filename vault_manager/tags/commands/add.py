@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 from . import Command
 from ..common import get_vault_root, extract_tags_from_frontmatter, is_valid_obsidian_tag
 from vault_manager.index.common import get_database_path
-from vault_manager.core.frontmatter import is_sensitive_note
+from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 
 # Try to import anthropic for AI features
@@ -24,6 +24,7 @@ try:
     from anthropic import Anthropic
     HAS_ANTHROPIC = True
 except ImportError:
+    Anthropic = None
     HAS_ANTHROPIC = False
 
 
@@ -621,7 +622,7 @@ Note content:
                     content = f.read()
 
                 # Check if note is marked as sensitive
-                if is_sensitive_note(content):
+                if FrontmatterManager.is_sensitive_note(content):
                     print(f"  Skipping (sensitive): {relative_path}")
                     stats['skipped_sensitive'] += 1
                     continue
