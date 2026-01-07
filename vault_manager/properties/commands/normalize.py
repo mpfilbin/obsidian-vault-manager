@@ -8,7 +8,6 @@ properties across notes according to defined rules.
 import sys
 import yaml
 from argparse import ArgumentParser, Namespace
-from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -16,6 +15,7 @@ from . import Command
 from ..common import get_vault_root, extract_frontmatter
 from vault_manager.core.vault import iter_markdown_files
 from vault_manager.core.file_ops import atomic_update
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class NormalizeCommand(Command):
@@ -75,16 +75,20 @@ class NormalizeCommand(Command):
         print(f"  - Rename: url → source")
         print(f"  - Reorder: {', '.join(self.PREFERRED_ORDER)}, then others alphabetically")
 
-        # Process directory
-        stats = self._process_directory(target_dir, vault_root, args.dry_run)
+        # Process directory with DryRunContext
+        with DryRunContext(args.dry_run) as ctx:
+            self._process_directory(target_dir, vault_root, ctx)
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
+            # Print summary
+            additional_info = f"Remove: {', '.join(sorted(self.REMOVE_PROPERTIES))}\nRename: url → source"
+            print_dry_run_summary(ctx, additional_info=additional_info)
 
-        if not args.dry_run and stats['files_changed'] > 0:
-            print(f"\nDone! Modified {stats['files_changed']} file{'s' if stats['files_changed'] != 1 else ''}.")
-        elif args.dry_run and stats['files_changed'] > 0:
-            print(f"\nDry run complete. {stats['files_changed']} file{'s' if stats['files_changed'] != 1 else ''} would be modified.")
+        # Final message
+        if ctx.stats.files_modified > 0:
+            if not args.dry_run:
+                print(f"\nDone! Modified {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''}.")
+            else:
+                print(f"\nDry run complete. {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''} would be modified.")
         else:
             print("\nNo changes needed.")
 
@@ -187,78 +191,41 @@ class NormalizeCommand(Command):
         else:
             return success, changes
 
-    def _process_directory(self, directory: Path, vault_root: Path, dry_run: bool = False) -> Dict:
+    def _process_directory(self, directory: Path, vault_root: Path, ctx: DryRunContext) -> None:
         """
         Recursively process all markdown files in a directory.
 
-        Returns:
-            Dictionary with statistics
+        Args:
+            directory: Directory to process
+            vault_root: Root directory of the vault
+            ctx: DryRunContext for tracking operations
         """
-        stats = {
-            'total_files': 0,
-            'files_changed': 0,
-            'files_skipped_no_frontmatter': 0,
-            'files_skipped_no_changes': 0,
-            'files_failed': 0,
-            'failed_files': [],
-            'change_counts': Counter()
-        }
-
-        print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
+        print(f"\n{'DRY RUN - ' if ctx.dry_run else ''}Processing markdown files...")
 
         # Use iter_markdown_files for memory-efficient traversal
         additional_ignores = {'Excalidraw', 'Calendar'}
         for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
-            stats['total_files'] += 1
+            ctx.stats.increment('total_files')
             relative_path = file_path.relative_to(vault_root)
 
             # Normalize the file
-            success, changes = self._normalize_file(file_path, vault_root, dry_run)
+            success, changes = self._normalize_file(file_path, vault_root, ctx.dry_run)
 
             if not success:
                 if "No frontmatter found" in changes[0]:
-                    stats['files_skipped_no_frontmatter'] += 1
+                    ctx.stats.increment('files_skipped_no_frontmatter')
                 else:
-                    stats['files_failed'] += 1
-                    stats['failed_files'].append((str(relative_path), changes[0]))
+                    ctx.stats.increment('files_failed')
                     print(f"  Failed: {relative_path} - {changes[0]}")
             elif not changes:
-                stats['files_skipped_no_changes'] += 1
+                ctx.stats.increment('files_skipped_no_changes')
             else:
-                stats['files_changed'] += 1
+                ctx.stats.increment('files_modified')
                 for change in changes:
-                    stats['change_counts'][change] += 1
+                    ctx.stats.increment(f'change_{change}')
 
-                mode = "Would modify" if dry_run else "Modified"
+                ctx.record_change(file_path, f"Normalized: {', '.join(changes)}", changes=changes)
+                mode = "Would modify" if ctx.dry_run else "Modified"
                 print(f"  {mode}: {relative_path}")
                 for change in changes:
                     print(f"    - {change}")
-
-        return stats
-
-    def _print_summary(self, stats: Dict, dry_run: bool = False) -> None:
-        """Print summary of normalization results."""
-        print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
-        print("=" * 60)
-        print(f"Total markdown files: {stats['total_files']}")
-        print(f"Files changed: {stats['files_changed']}")
-        print(f"Files skipped (no frontmatter): {stats['files_skipped_no_frontmatter']}")
-        print(f"Files skipped (no changes needed): {stats['files_skipped_no_changes']}")
-        print(f"Files failed: {stats['files_failed']}")
-
-        if stats['change_counts']:
-            print(f"\nChanges applied:")
-            for change, count in stats['change_counts'].most_common():
-                print(f"  - {change}: {count}")
-
-        if stats['failed_files']:
-            print(f"\nFailed files ({len(stats['failed_files'])}):")
-            for file_path, error in stats['failed_files']:
-                print(f"  - {file_path}: {error}")
-
-        if dry_run and stats['files_changed'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)

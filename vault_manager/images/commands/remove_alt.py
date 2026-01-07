@@ -9,12 +9,13 @@ import re
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Tuple, Optional
 
 from . import Command
 from ..common import get_vault_root, IMAGE_EXTENSIONS
 from vault_manager.core.vault import iter_markdown_files
 from vault_manager.core.file_ops import atomic_update
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class RemoveAltCommand(Command):
@@ -63,16 +64,17 @@ class RemoveAltCommand(Command):
         print(f"Mode: {'DRY RUN (preview only)' if args.dry_run else 'MODIFY FILES'}")
         print(f"Ignored directories: .obsidian, .trash, Excalidraw")
 
-        # Process directory
-        stats = self._process_directory(target_dir, vault_root, args.dry_run)
+        # Process directory with DryRunContext
+        with DryRunContext(args.dry_run) as ctx:
+            self._process_directory(target_dir, vault_root, ctx)
+            print_dry_run_summary(ctx)
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
-
-        if not args.dry_run and stats['modified_files'] > 0:
-            print(f"\nDone! Modified {stats['modified_files']} file{'s' if stats['modified_files'] != 1 else ''}.")
-        elif args.dry_run and stats['modified_files'] > 0:
-            print(f"\nDry run complete. {stats['modified_files']} file{'s' if stats['modified_files'] != 1 else ''} would be modified.")
+        # Final message
+        if ctx.stats.files_modified > 0:
+            if not args.dry_run:
+                print(f"\nDone! Modified {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''}.")
+            else:
+                print(f"\nDry run complete. {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''} would be modified.")
         else:
             print("\nNo changes needed.")
 
@@ -126,62 +128,34 @@ class RemoveAltCommand(Command):
         success = atomic_update(file_path, updater, dry_run=dry_run)
         return success, changes
 
-    def _process_directory(self, directory: Path, vault_root: Path, dry_run: bool = False) -> Dict:
+    def _process_directory(self, directory: Path, vault_root: Path, ctx: DryRunContext) -> None:
         """
         Recursively process all markdown files in a directory.
 
-        Returns:
-            Dictionary with statistics
+        Args:
+            directory: Directory to process
+            vault_root: Root directory of the vault
+            ctx: DryRunContext for tracking operations
         """
-        stats = {
-            'total_files': 0,
-            'processed_files': 0,
-            'modified_files': 0,
-            'total_changes': 0,
-            'failed_files': [],
-            'modified_file_list': []
-        }
-
-        print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
+        print(f"\n{'DRY RUN - ' if ctx.dry_run else ''}Processing markdown files...")
 
         for file_path in iter_markdown_files(directory, vault_root, additional_ignores={'Excalidraw'}, exclude_excalidraw=False):
-            stats['total_files'] += 1
+            ctx.stats.increment('total_files')
 
             # Process the file
-            success, changes = self._process_file(file_path, dry_run)
+            success, changes = self._process_file(file_path, ctx.dry_run)
 
             if success:
-                stats['processed_files'] += 1
+                ctx.stats.increment('files_processed')
                 if changes > 0:
-                    stats['modified_files'] += 1
-                    stats['total_changes'] += changes
+                    ctx.stats.increment('files_modified')
+                    ctx.stats.increment('total_changes', changes)
                     relative_path = file_path.relative_to(vault_root)
-                    stats['modified_file_list'].append((str(relative_path), changes))
 
-                    mode = "Would modify" if dry_run else "Modified"
+                    ctx.record_change(file_path, f"Removed alt text from {changes} image{'s' if changes != 1 else ''}")
+                    mode = "Would modify" if ctx.dry_run else "Modified"
                     print(f"  {mode}: {relative_path} ({changes} change{'s' if changes != 1 else ''})")
             else:
-                stats['failed_files'].append(str(file_path.relative_to(vault_root)))
-
-        return stats
-
-    def _print_summary(self, stats: Dict, dry_run: bool = False) -> None:
-        """Print summary of alt text removal results."""
-        print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
-        print("=" * 60)
-        print(f"Total markdown files: {stats['total_files']}")
-        print(f"Successfully processed: {stats['processed_files']}")
-        print(f"Files modified: {stats['modified_files']}")
-        print(f"Total changes: {stats['total_changes']}")
-
-        if stats['failed_files']:
-            print(f"\nFailed files ({len(stats['failed_files'])}):")
-            for file_path in stats['failed_files']:
-                print(f"  - {file_path}")
-
-        if dry_run and stats['modified_files'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)
+                ctx.stats.increment('files_failed')
+                relative_path = file_path.relative_to(vault_root)
+                print(f"  ✗ Failed: {relative_path}")
