@@ -171,19 +171,6 @@ class RelateCommand(Command):
             # If there's any database error, return None
             return None
 
-    def _extract_tags_from_frontmatter(self, content: str) -> Set[str]:
-        """
-        Extract tags from YAML frontmatter.
-
-        Args:
-            content: Full markdown content with frontmatter
-
-        Returns:
-            Set of tags found in frontmatter
-        """
-        tags_list = FrontmatterManager.extract_tags_from_frontmatter(content)
-        return set(tags_list)
-
     def _extract_wiki_links(self, content: str) -> Set[str]:
         """Extract wiki-links from markdown content."""
         links = set()
@@ -245,7 +232,7 @@ class RelateCommand(Command):
                     continue
 
                 note = NoteMetadata(file_path, relative_path)
-                note.tags = self._extract_tags_from_frontmatter(content)
+                note.tags = set(FrontmatterManager.extract_tags_from_frontmatter(content))
                 note.links = self._extract_wiki_links(body)
                 note.title = file_path.name
                 note.title_words = self._extract_title_words(file_path.name)

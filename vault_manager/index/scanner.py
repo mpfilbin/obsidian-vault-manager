@@ -183,7 +183,7 @@ class FileScanner:
             # Check for frontmatter
             if content.startswith('---'):
                 file_info.has_frontmatter = True
-                tags = self._extract_tags_from_frontmatter(content)
+                tags = FrontmatterManager.extract_tags_from_frontmatter(content)
                 if tags:
                     file_info.tags = tags
 
@@ -195,20 +195,8 @@ class FileScanner:
 
                 if content.startswith('---'):
                     file_info.has_frontmatter = True
-                    tags = self._extract_tags_from_frontmatter(content)
+                    tags = FrontmatterManager.extract_tags_from_frontmatter(content)
                     if tags:
                         file_info.tags = tags
             except Exception:
                 pass  # Skip if cannot read
-
-    def _extract_tags_from_frontmatter(self, content: str) -> List[str]:
-        """
-        Extract tags from YAML frontmatter.
-
-        Args:
-            content: Full markdown file content
-
-        Returns:
-            List of tags found in frontmatter
-        """
-        return FrontmatterManager.extract_tags_from_frontmatter(content)
