@@ -495,3 +495,279 @@ class TestIntegration:
         safe_move(temp_file, moved, dry_run=True)
         assert temp_file.exists()
         assert not moved.exists()
+
+
+@pytest.mark.unit
+class TestErrorPrintStatements:
+    """Test error print statements (for coverage of non-silent error paths)."""
+
+    def test_safe_read_permission_error_prints(self, temp_file, capsys):
+        """Test that permission errors print to stderr when not silent."""
+        # Make file unreadable
+        temp_file.chmod(0o000)
+        try:
+            result = safe_read(temp_file, silent=False)
+            assert result is None
+            captured = capsys.readouterr()
+            assert "Permission denied" in captured.err
+        finally:
+            # Restore permissions for cleanup
+            temp_file.chmod(0o644)
+
+    def test_safe_read_unicode_error_prints(self, temp_dir, capsys):
+        """Test that unicode decode errors print to stderr when not silent."""
+        # Create a file with invalid UTF-8 bytes
+        binary_file = temp_dir / "binary.bin"
+        binary_file.write_bytes(b'\xff\xfe\xfd')
+
+        result = safe_read(binary_file, silent=False)
+        assert result is None
+        captured = capsys.readouterr()
+        assert "Could not decode file" in captured.err or "wrong encoding" in captured.err
+
+    def test_safe_read_generic_error_prints(self, temp_dir, capsys, monkeypatch):
+        """Test that generic exceptions print to stderr when not silent."""
+        from pathlib import Path
+
+        # Create a mock that raises a generic exception
+        def mock_read_text(*args, **kwargs):
+            raise RuntimeError("Mock error")
+
+        monkeypatch.setattr(Path, "read_text", mock_read_text)
+
+        test_file = temp_dir / "test.md"
+        test_file.write_text("# Test\n")
+
+        result = safe_read(test_file, silent=False)
+        assert result is None
+        captured = capsys.readouterr()
+        assert "Error reading" in captured.err
+
+    def test_safe_write_permission_error_prints(self, temp_dir, capsys):
+        """Test that permission errors print to stderr when not silent."""
+        # Create a read-only directory
+        readonly_dir = temp_dir / "readonly"
+        readonly_dir.mkdir()
+        readonly_dir.chmod(0o444)
+
+        try:
+            test_file = readonly_dir / "test.md"
+            result = safe_write(test_file, "# Test\n", silent=False)
+            assert result is False
+            captured = capsys.readouterr()
+            assert "Permission denied" in captured.err
+        finally:
+            # Restore permissions for cleanup
+            readonly_dir.chmod(0o755)
+
+    def test_safe_write_oserror_prints(self, temp_dir, capsys, monkeypatch):
+        """Test that OS errors print to stderr when not silent."""
+        from pathlib import Path
+
+        # Create a mock that raises OSError
+        def mock_write_text(*args, **kwargs):
+            raise OSError("Mock OS error")
+
+        monkeypatch.setattr(Path, "write_text", mock_write_text)
+
+        test_file = temp_dir / "test.md"
+        result = safe_write(test_file, "# Test\n", silent=False)
+        assert result is False
+        captured = capsys.readouterr()
+        assert "Error writing" in captured.err
+
+    def test_safe_write_generic_error_prints(self, temp_dir, capsys, monkeypatch):
+        """Test that generic exceptions print to stderr when not silent."""
+        from pathlib import Path
+
+        # Create a mock that raises a generic exception
+        def mock_write_text(*args, **kwargs):
+            raise ValueError("Mock error")
+
+        monkeypatch.setattr(Path, "write_text", mock_write_text)
+
+        test_file = temp_dir / "test.md"
+        result = safe_write(test_file, "# Test\n", silent=False)
+        assert result is False
+        captured = capsys.readouterr()
+        assert "Error writing" in captured.err
+
+    def test_atomic_update_updater_error_prints(self, temp_file, capsys):
+        """Test that updater function errors print to stderr when not silent."""
+        def failing_updater(content):
+            raise ValueError("Updater failed")
+
+        result = atomic_update(temp_file, failing_updater, silent=False)
+        assert result is False
+        captured = capsys.readouterr()
+        assert "Error in updater function" in captured.err
+
+    def test_safe_move_oserror_prints(self, temp_dir, capsys, monkeypatch):
+        """Test that OS errors in move print to stderr when not silent."""
+        from pathlib import Path
+
+        # Create a mock that raises OSError
+        def mock_rename(self, target):
+            raise OSError("Mock move error")
+
+        monkeypatch.setattr(Path, "rename", mock_rename)
+
+        source = temp_dir / "source.md"
+        source.write_text("# Source\n")
+        dest = temp_dir / "dest.md"
+
+        result = safe_move(source, dest, silent=False)
+        assert result is False
+        captured = capsys.readouterr()
+        assert "Error moving" in captured.err
+
+    def test_safe_move_generic_error_prints(self, temp_dir, capsys, monkeypatch):
+        """Test that generic exceptions in move print to stderr when not silent."""
+        from pathlib import Path
+
+        # Create a mock that raises a generic exception
+        def mock_rename(self, target):
+            raise RuntimeError("Mock unexpected error")
+
+        monkeypatch.setattr(Path, "rename", mock_rename)
+
+        source = temp_dir / "source.md"
+        source.write_text("# Source\n")
+        dest = temp_dir / "dest.md"
+
+        result = safe_move(source, dest, silent=False)
+        assert result is False
+        captured = capsys.readouterr()
+        assert "Unexpected error moving" in captured.err
+
+
+@pytest.mark.unit
+class TestOnErrorCallbacks:
+    """Test on_error callback execution for different exception types."""
+
+    def test_safe_read_permission_error_callback(self, temp_file):
+        """Test that on_error callback is called for permission errors."""
+        errors = []
+
+        def error_handler(path, error):
+            errors.append((path, error))
+
+        temp_file.chmod(0o000)
+        try:
+            result = safe_read(temp_file, on_error=error_handler, silent=True)
+            assert result is None
+            assert len(errors) == 1
+            assert errors[0][0] == temp_file
+            assert isinstance(errors[0][1], PermissionError)
+        finally:
+            temp_file.chmod(0o644)
+
+    def test_safe_read_unicode_error_callback(self, temp_dir):
+        """Test that on_error callback is called for unicode decode errors."""
+        errors = []
+
+        def error_handler(path, error):
+            errors.append((path, error))
+
+        # Create file with invalid UTF-8
+        binary_file = temp_dir / "binary.bin"
+        binary_file.write_bytes(b'\xff\xfe\xfd')
+
+        result = safe_read(binary_file, on_error=error_handler, silent=True)
+        assert result is None
+        assert len(errors) == 1
+        assert errors[0][0] == binary_file
+        assert isinstance(errors[0][1], UnicodeDecodeError)
+
+    def test_safe_read_generic_error_callback(self, temp_dir, monkeypatch):
+        """Test that on_error callback is called for generic exceptions."""
+        from pathlib import Path
+
+        errors = []
+
+        def error_handler(path, error):
+            errors.append((path, error))
+
+        # Create a mock that raises a generic exception
+        def mock_read_text(*args, **kwargs):
+            raise RuntimeError("Mock error")
+
+        monkeypatch.setattr(Path, "read_text", mock_read_text)
+
+        test_file = temp_dir / "test.md"
+        test_file.write_text("# Test\n")
+
+        result = safe_read(test_file, on_error=error_handler, silent=True)
+        assert result is None
+        assert len(errors) == 1
+        assert errors[0][0] == test_file
+        assert isinstance(errors[0][1], RuntimeError)
+
+    def test_safe_write_permission_error_callback(self, temp_dir):
+        """Test that on_error callback is called for permission errors."""
+        errors = []
+
+        def error_handler(path, error):
+            errors.append((path, error))
+
+        # Create read-only directory
+        readonly_dir = temp_dir / "readonly"
+        readonly_dir.mkdir()
+        readonly_dir.chmod(0o444)
+
+        try:
+            test_file = readonly_dir / "test.md"
+            result = safe_write(test_file, "# Test\n", on_error=error_handler, silent=True)
+            assert result is False
+            assert len(errors) == 1
+            assert errors[0][0] == test_file
+            assert isinstance(errors[0][1], PermissionError)
+        finally:
+            readonly_dir.chmod(0o755)
+
+    def test_safe_write_generic_error_callback(self, temp_dir, monkeypatch):
+        """Test that on_error callback is called for generic exceptions."""
+        from pathlib import Path
+
+        errors = []
+
+        def error_handler(path, error):
+            errors.append((path, error))
+
+        # Create a mock that raises a generic exception
+        def mock_write_text(*args, **kwargs):
+            raise ValueError("Mock error")
+
+        monkeypatch.setattr(Path, "write_text", mock_write_text)
+
+        test_file = temp_dir / "test.md"
+        result = safe_write(test_file, "# Test\n", on_error=error_handler, silent=True)
+        assert result is False
+        assert len(errors) == 1
+        assert errors[0][0] == test_file
+        assert isinstance(errors[0][1], ValueError)
+
+    def test_safe_move_generic_error_callback(self, temp_dir, monkeypatch):
+        """Test that on_error callback is called for generic exceptions."""
+        from pathlib import Path
+
+        errors = []
+
+        def error_handler(path, error):
+            errors.append((path, error))
+
+        # Create a mock that raises a generic exception
+        def mock_rename(self, target):
+            raise RuntimeError("Mock unexpected error")
+
+        monkeypatch.setattr(Path, "rename", mock_rename)
+
+        source = temp_dir / "source.md"
+        source.write_text("# Source\n")
+        dest = temp_dir / "dest.md"
+
+        result = safe_move(source, dest, on_error=error_handler, silent=True)
+        assert result is False
+        assert len(errors) == 1
+        assert errors[0][0] == source
+        assert isinstance(errors[0][1], RuntimeError)
