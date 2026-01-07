@@ -18,7 +18,7 @@ class Command(ABC):
     and implement the execute() and configure_parser() methods.
 
     Examples:
-        >>> class MyCommand(Command):
+        >> class MyCommand(Command):
         ...     @staticmethod
         ...     def configure_parser(parser):
         ...         parser.add_argument('--option', help='An option')

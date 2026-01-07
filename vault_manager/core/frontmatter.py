@@ -131,11 +131,11 @@ def needs_quoting(value: str) -> bool:
         True if value should be quoted in YAML
 
     Examples:
-        >>> needs_quoting('simple')
+        >> needs_quoting('simple')
         False
-        >>> needs_quoting('2024')
+        >> needs_quoting('2024')
         True
-        >>> needs_quoting('has:colon')
+        >> needs_quoting('has:colon')
         True
     """
     if not value:
@@ -171,9 +171,9 @@ def format_tag_name(tag: str) -> str:
         Formatted tag name (quoted if necessary)
 
     Examples:
-        >>> format_tag_name('software-development')
+        >> format_tag_name('software-development')
         'software-development'
-        >>> format_tag_name('2024')
+        >> format_tag_name('2024')
         '"2024"'
     """
     if needs_quoting(tag):
@@ -197,13 +197,13 @@ def is_valid_obsidian_tag(tag: str) -> bool:
         True if tag is valid
 
     Examples:
-        >>> is_valid_obsidian_tag("software-development")
+        >> is_valid_obsidian_tag("software-development")
         True
-        >>> is_valid_obsidian_tag("2024")
+        >> is_valid_obsidian_tag("2024")
         False
-        >>> is_valid_obsidian_tag("y2024")
+        >> is_valid_obsidian_tag("y2024")
         True
-        >>> is_valid_obsidian_tag("nested/tag")
+        >> is_valid_obsidian_tag("nested/tag")
         True
     """
     if not tag:
@@ -339,9 +339,9 @@ class FrontmatterManager:
             Complete markdown content with frontmatter
 
         Examples:
-            >>> fm = {'title': 'Test', 'tags': ['foo', 'bar']}
-            >>> content = FrontmatterManager.serialize(fm, '# Hello')
-            >>> '---' in content
+            >> fm = {'title': 'Test', 'tags': ['foo', 'bar']}
+            >> content = FrontmatterManager.serialize(fm, '# Hello')
+            >> '---' in content
             True
         """
         # If no frontmatter or empty dict, return body only

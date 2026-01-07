@@ -5,14 +5,14 @@ This module provides the LinkExtractor class which extracts and resolves
 all types of links from markdown files (wiki-links, markdown links, image embeds).
 """
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 from .common import get_vault_root
 
+EXTERNAL_URL_PROTOCOLS = ('http://', 'https://', 'file://', '//', 'ftp://', 'mailto:')
 
 # Link type constants
 LINK_TYPE_WIKI = 'wiki'
@@ -20,18 +20,20 @@ LINK_TYPE_MARKDOWN = 'markdown'
 LINK_TYPE_IMAGE_WIKI = 'image_wiki'
 LINK_TYPE_IMAGE_MARKDOWN = 'image_markdown'
 
+
+
 # Regex patterns for link extraction
 # Wiki-links: [[Note]] or [[Note|Display Text]]
-WIKI_LINK_PATTERN = re.compile(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]')
+WIKI_LINK_PATTERN = re.compile(r'\[\[([^]|]+)(?:\|([^]]+))?]]')
 
 # Markdown links: [text](url)
-MARKDOWN_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+MARKDOWN_LINK_PATTERN = re.compile(r'\[([^]]+)]\(([^)]+)\)')
 
 # Image embeds (wiki): ![[image.png]] or ![[image.png|alt text]]
-IMAGE_WIKI_PATTERN = re.compile(r'!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]')
+IMAGE_WIKI_PATTERN = re.compile(r'!\[\[([^]|]+)(?:\|([^]]+))?]]')
 
 # Image embeds (markdown): ![alt](path)
-IMAGE_MARKDOWN_PATTERN = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+IMAGE_MARKDOWN_PATTERN = re.compile(r'!\[([^]]*)]\(([^)]+)\)')
 
 
 @dataclass
@@ -182,7 +184,7 @@ class LinkExtractor:
             target_text = match.group(2).strip()
 
             # Skip external URLs
-            if target_text.startswith(('http://', 'https://', '//', 'ftp://')):
+            if target_text.startswith(EXTERNAL_URL_PROTOCOLS):
                 continue
 
             target_path = self.resolve_link_target(target_text, source_path)
@@ -215,18 +217,18 @@ class LinkExtractor:
             Relative path to target file (from vault root), or None if not found
 
         Examples:
-            >>> resolve_link_target('Note.md', Path('/vault/Personal/Source.md'))
+            >> resolve_link_target('Note.md', Path('/vault/Personal/Source.md'))
             'Personal/Note.md'
-            >>> resolve_link_target('../Other/Target', Path('/vault/Personal/Source.md'))
+            >> resolve_link_target('../Other/Target', Path('/vault/Personal/Source.md'))
             'Other/Target.md'
-            >>> resolve_link_target('NonExistent', Path('/vault/Source.md'))
+            >> resolve_link_target('NonExistent', Path('/vault/Source.md'))
             None
         """
         # Clean link text
         link_text = link_text.strip()
 
         # Skip external URLs
-        if link_text.startswith(('http://', 'https://', 'file://', '//', 'ftp://', 'mailto:')):
+        if link_text.startswith(EXTERNAL_URL_PROTOCOLS):
             return None
 
         # Remove anchor fragments and query parameters

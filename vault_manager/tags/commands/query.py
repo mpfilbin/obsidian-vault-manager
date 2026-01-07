@@ -9,10 +9,9 @@ import sqlite3
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 from . import Command
-from ..common import get_vault_root
 from vault_manager.index.common import get_database_path
 
 
@@ -71,7 +70,7 @@ class QueryCommand(Command):
         if not db_path.exists():
             print(f"Error: Database not found: {db_path}")
             print("\nGenerate it first with:")
-            print("  python -m Library.index build")
+            print("  vault index build")
             sys.exit(1)
 
         # Determine which query to run

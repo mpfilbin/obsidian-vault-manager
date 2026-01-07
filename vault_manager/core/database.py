@@ -25,8 +25,8 @@ def rebuild_vault_database(silent: bool = False, verbose: bool = False) -> bool:
         True if successful, False if failed
 
     Example:
-        >>> from vault_manager.core.database import rebuild_vault_database
-        >>> if rebuild_vault_database():
+        >> from vault_manager.core.database import rebuild_vault_database
+        >> if rebuild_vault_database():
         ...     print("Database updated successfully")
     """
     try:
@@ -72,10 +72,10 @@ def get_database_stats(db_path) -> dict:
         Dictionary with database statistics
 
     Example:
-        >>> from pathlib import Path
-        >>> from vault_manager.core.database import get_database_stats
-        >>> stats = get_database_stats(Path('vault.db'))
-        >>> print(f"Total files: {stats['total_files']}")
+        >> from pathlib import Path
+        >> from vault_manager.core.database import get_database_stats
+        >> stats = get_database_stats(Path('vault.db'))
+        >> print(f"Total files: {stats['total_files']}")
     """
     import sqlite3
 
@@ -138,9 +138,9 @@ def require_database(vault_root, command_name: str = "this command") -> None:
         command_name: Name of the command requiring the database (for error message)
 
     Example:
-        >>> from vault_manager.core.database import require_database
-        >>> from vault_manager.core.vault import get_vault_root
-        >>> require_database(get_vault_root(), "query")
+        >> from vault_manager.core.database import require_database
+        >> from vault_manager.core.vault import get_vault_root
+        >> require_database(get_vault_root(), "query")
     """
     if not database_exists(vault_root):
         print(f"\nError: vault.db not found.")

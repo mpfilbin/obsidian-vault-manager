@@ -55,7 +55,7 @@ def temp_vault_structure(tmp_path):
 
     return vault_root
 
-
+@pytest.mark.unit
 class TestIterMarkdownFiles:
     """Test iter_markdown_files iterator function."""
 

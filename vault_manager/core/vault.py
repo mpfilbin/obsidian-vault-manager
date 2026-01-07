@@ -39,10 +39,10 @@ def get_vault_root() -> Path:
         RuntimeError: If vault root has not been set
 
     Examples:
-        >>> from vault_manager.core.vault import set_vault_root
-        >>> set_vault_root(Path('/path/to/vault'))
-        >>> vault_root = get_vault_root()
-        >>> vault_root == Path('/path/to/vault')
+        >> from vault_manager.core.vault import set_vault_root
+        >> set_vault_root(Path('/path/to/vault'))
+        >> vault_root = get_vault_root()
+        >> vault_root == Path('/path/to/vault')
         True
     """
     if _VAULT_ROOT is None:

@@ -16,6 +16,7 @@ from vault_manager.core.frontmatter import (
 )
 
 
+@pytest.mark.unit
 class TestExtractFrontmatter:
     """Test frontmatter extraction from markdown content."""
 

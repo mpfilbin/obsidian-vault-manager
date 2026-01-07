@@ -31,8 +31,8 @@ def require_library(
         SystemExit: If library is not installed
 
     Examples:
-        >>> require_library('anthropic', 'Anthropic', purpose='AI tag generation')
-        >>> require_library('yaml', pip_package='pyyaml', purpose='YAML processing')
+        >> require_library('anthropic', 'Anthropic', purpose='AI tag generation')
+        >> require_library('yaml', pip_package='pyyaml', purpose='YAML processing')
     """
     try:
         module = __import__(module_name)
@@ -63,7 +63,7 @@ def check_api_key(env_var: str, service_name: str) -> str:
         SystemExit: If environment variable is not set
 
     Examples:
-        >>> api_key = check_api_key('ANTHROPIC_API_KEY', 'Anthropic')
+        >> api_key = check_api_key('ANTHROPIC_API_KEY', 'Anthropic')
     """
     api_key = os.environ.get(env_var)
     if not api_key:
@@ -97,8 +97,8 @@ def validate_file_path(
         SystemExit: If validation fails
 
     Examples:
-        >>> vault_root = Path('/vault')
-        >>> file_path = validate_file_path('notes/test.md', vault_root)
+        >> vault_root = Path('/vault')
+        >> file_path = validate_file_path('notes/test.md', vault_root)
     """
     file_path = vault_root / file_path_arg
 

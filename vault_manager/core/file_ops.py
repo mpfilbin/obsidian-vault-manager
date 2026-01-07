@@ -35,15 +35,15 @@ def safe_read(
         File content as string, or None if reading failed
 
     Examples:
-        >>> from pathlib import Path
-        >>> content = safe_read(Path('note.md'))
-        >>> if content:
+        >> from pathlib import Path
+        >> content = safe_read(Path('note.md'))
+        >> if content:
         ...     print(f"Read {len(content)} characters")
 
-        >>> # With custom error handling
-        >>> def handle_error(path, error):
+        >> # With custom error handling
+        >> def handle_error(path, error):
         ...     print(f"Failed to read {path}: {error}")
-        >>> content = safe_read(Path('note.md'), on_error=handle_error)
+        >> content = safe_read(Path('note.md'), on_error=handle_error)
     """
     try:
         return path.read_text(encoding=encoding)
@@ -98,16 +98,16 @@ def safe_write(
         True if successful (or dry-run), False on error
 
     Examples:
-        >>> from pathlib import Path
-        >>> # Normal write
-        >>> success = safe_write(Path('note.md'), '# My Note\\n')
-        >>> print(f"Write {'succeeded' if success else 'failed'}")
+        >> from pathlib import Path
+        >> # Normal write
+        >> success = safe_write(Path('note.md'), '# My Note\\n')
+        >> print(f"Write {'succeeded' if success else 'failed'}")
 
-        >>> # Dry-run (doesn't actually write)
-        >>> success = safe_write(Path('note.md'), '# Test', dry_run=True)
+        >> # Dry-run (doesn't actually write)
+        >> success = safe_write(Path('note.md'), '# Test', dry_run=True)
 
-        >>> # With parent directory creation
-        >>> success = safe_write(Path('subdir/note.md'), '# Test', create_parents=True)
+        >> # With parent directory creation
+        >> success = safe_write(Path('subdir/note.md'), '# Test', create_parents=True)
     """
     if dry_run:
         return True
@@ -169,24 +169,24 @@ def atomic_update(
         True if successful, False on error
 
     Examples:
-        >>> from pathlib import Path
-        >>>
-        >>> # Simple update function
-        >>> def add_line(content):
+        >> from pathlib import Path
+        >>
+        >> # Simple update function
+        >> def add_line(content):
         ...     return content + "\\n# New Section\\n"
-        >>>
-        >>> success = atomic_update(Path('note.md'), add_line)
-        >>>
-        >>> # Update with validation
-        >>> def update_if_valid(content):
+        >>
+        >> success = atomic_update(Path('note.md'), add_line)
+        >>
+        >> # Update with validation
+        >> def update_if_valid(content):
         ...     if '# Title' not in content:
         ...         return None  # Skip this file
         ...     return content.replace('old', 'new')
 
-        >>> success = atomic_update(Path('note.md'), update_if_valid)
+        >> success = atomic_update(Path('note.md'), update_if_valid)
 
-        >>> # Dry-run mode
-        >>> success = atomic_update(Path('note.md'), add_line, dry_run=True)
+        >> # Dry-run mode
+        >> success = atomic_update(Path('note.md'), add_line, dry_run=True)
     """
     # Read current content
     content = safe_read(path, encoding=encoding, on_error=on_error, silent=silent)
@@ -246,12 +246,12 @@ def safe_move(
         True if successful (or dry-run), False on error
 
     Examples:
-        >>> from pathlib import Path
-        >>> # Move file
-        >>> success = safe_move(Path('old.md'), Path('.trash/old.md'))
+        >> from pathlib import Path
+        >> # Move file
+        >> success = safe_move(Path('old.md'), Path('.trash/old.md'))
 
-        >>> # Dry-run
-        >>> success = safe_move(Path('old.md'), Path('new.md'), dry_run=True)
+        >> # Dry-run
+        >> success = safe_move(Path('old.md'), Path('new.md'), dry_run=True)
     """
     if dry_run:
         return True

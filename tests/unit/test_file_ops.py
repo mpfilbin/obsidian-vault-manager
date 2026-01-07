@@ -30,7 +30,7 @@ def temp_dir(tmp_path):
     """Create a temporary directory."""
     return tmp_path
 
-
+@pytest.mark.unit
 class TestSafeRead:
     """Tests for safe_read() function."""
 

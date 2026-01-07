@@ -5,7 +5,6 @@ This module implements the repair command which reads the invalid-frontmatter.md
 report and attempts to fix issues for checked entries.
 """
 
-import os
 import re
 import shutil
 import sys
@@ -13,7 +12,7 @@ from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 from . import Command
 from ..common import get_vault_root
@@ -22,6 +21,7 @@ try:
     import yaml
     HAS_YAML = True
 except ImportError:
+    yaml = None
     HAS_YAML = False
 
 
@@ -66,7 +66,7 @@ class RepairCommand(Command):
         if not report_path.exists():
             print("Error: invalid-frontmatter.md not found")
             print("\nRun validation first:")
-            print("  python -m Library.properties validate")
+            print("  vault properties validate")
             sys.exit(1)
 
         # Display header
@@ -568,5 +568,5 @@ class RepairCommand(Command):
             print("✓ Repairs completed successfully")
             print("\nRecommendations:")
             print("1. Run validation again to check for remaining issues:")
-            print("   python -m Library.properties validate")
+            print("   vault properties validate")
             print("2. Review the repaired files to ensure correctness")
