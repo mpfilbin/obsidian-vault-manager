@@ -19,6 +19,7 @@ from ..common import get_vault_root, extract_frontmatter
 from vault_manager.index.common import get_database_path
 from vault_manager.core.vault import iter_markdown_files
 from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class NoteMetadata:
@@ -118,22 +119,27 @@ class RelateCommand(Command):
         related_map = self._find_related_notes(notes, args.max_related, vault_root)
 
         # Update files (filter to single file if needed)
-        if is_single_file:
-            target_file_relative = str(target_path.relative_to(vault_root))
-            notes_to_update = {k: v for k, v in notes.items() if k == target_file_relative}
-            stats = self._update_files_with_related(notes_to_update, related_map, vault_root, args.dry_run, args.overwrite)
-        else:
-            stats = self._update_files_with_related(notes, related_map, vault_root, args.dry_run, args.overwrite)
+        with DryRunContext(args.dry_run) as ctx:
+            ctx.stats.custom_stats['total_notes'] = len(notes)
+            ctx.stats.custom_stats['notes_with_relations'] = len(related_map)
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
+            if is_single_file:
+                target_file_relative = str(target_path.relative_to(vault_root))
+                notes_to_update = {k: v for k, v in notes.items() if k == target_file_relative}
+                self._update_files_with_related(notes_to_update, related_map, vault_root, ctx, args.overwrite)
+            else:
+                self._update_files_with_related(notes, related_map, vault_root, ctx, args.overwrite)
 
-        if not args.dry_run and stats['processed'] > 0:
-            print(f"\nDone! Updated {stats['processed']} file{'s' if stats['processed'] != 1 else ''}.")
-        elif args.dry_run and stats['processed'] > 0:
-            print(f"\nDry run complete. {stats['processed']} file{'s' if stats['processed'] != 1 else ''} would be updated.")
-        else:
-            print("\nNo files updated.")
+            # Print summary
+            self._print_custom_summary(ctx)
+            print_dry_run_summary(ctx)
+
+            if not args.dry_run and ctx.stats.files_processed > 0:
+                print(f"\nDone! Updated {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''}.")
+            elif args.dry_run and ctx.stats.files_processed > 0:
+                print(f"\nDry run complete. {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''} would be updated.")
+            else:
+                print("\nNo files updated.")
 
     def _get_tag_frequencies_from_database(self, vault_root: Path) -> Optional[Dict[str, int]]:
         """
@@ -466,56 +472,42 @@ class RelateCommand(Command):
 
     def _update_files_with_related(self, notes: Dict[str, NoteMetadata],
                                    related_map: Dict[str, List[Tuple[str, float]]],
-                                   vault_root: Path, dry_run: bool, overwrite: bool) -> Dict:
+                                   vault_root: Path, ctx: DryRunContext, overwrite: bool) -> None:
         """Update files with related notes."""
-        stats = {
-            'total_notes': len(notes),
-            'notes_with_relations': len(related_map),
-            'processed': 0,
-            'skipped_has_related': 0,
-            'skipped_no_relations': 0,
-            'failed': 0
-        }
-
-        print(f"\n4. {'Would update' if dry_run else 'Updating'} files with related notes...")
+        print(f"\n4. {'Would update' if ctx.dry_run else 'Updating'} files with related notes...")
 
         for path, note in notes.items():
             if path not in related_map:
-                stats['skipped_no_relations'] += 1
+                ctx.stats.increment('skipped_no_relations')
                 continue
 
             if note.has_related and not overwrite:
                 print(f"  Skipping (has related): {path}")
-                stats['skipped_has_related'] += 1
+                ctx.stats.increment('skipped_has_related')
                 continue
 
             related_paths = [r[0] for r in related_map[path]]
 
-            if self._update_file_with_related(note.path, related_paths, vault_root, dry_run, overwrite):
-                stats['processed'] += 1
-                mode = "Would add" if dry_run else "Added"
+            if self._update_file_with_related(note.path, related_paths, vault_root, ctx.dry_run, overwrite):
+                ctx.stats.increment('files_processed')
+                ctx.record_change(
+                    note.path,
+                    f"Added {len(related_paths)} related note(s)",
+                    related_notes=related_paths
+                )
+                mode = "Would add" if ctx.dry_run else "Added"
                 print(f"  {mode} related to: {path}")
                 for rel_path, score in related_map[path]:
                     print(f"    - {rel_path} (score: {score:.3f})")
             else:
-                stats['failed'] += 1
+                ctx.stats.increment('files_failed')
 
-        return stats
-
-    def _print_summary(self, stats: Dict, dry_run: bool = False) -> None:
-        """Print summary of processing results."""
+    def _print_custom_summary(self, ctx: DryRunContext) -> None:
+        """Print custom summary of processing results."""
         print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
+        print("Related Notes Details")
         print("=" * 60)
-        print(f"Total notes scanned: {stats['total_notes']}")
-        print(f"Notes with relations found: {stats['notes_with_relations']}")
-        print(f"Files updated: {stats['processed']}")
-        print(f"Skipped (has related): {stats['skipped_has_related']}")
-        print(f"Skipped (no relations): {stats['skipped_no_relations']}")
-        print(f"Failed: {stats['failed']}")
-
-        if dry_run and stats['processed'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)
+        print(f"Total notes scanned: {ctx.stats.custom_stats.get('total_notes', 0)}")
+        print(f"Notes with relations found: {ctx.stats.custom_stats.get('notes_with_relations', 0)}")
+        print(f"Skipped (has related): {ctx.stats.custom_stats.get('skipped_has_related', 0)}")
+        print(f"Skipped (no relations): {ctx.stats.custom_stats.get('skipped_no_relations', 0)}")

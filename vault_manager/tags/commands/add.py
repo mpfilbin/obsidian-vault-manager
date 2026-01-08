@@ -18,6 +18,7 @@ from ..common import get_vault_root, extract_tags_from_frontmatter, is_valid_obs
 from vault_manager.index.common import get_database_path
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 # Try to import anthropic for AI features
 try:
@@ -114,17 +115,21 @@ class AddCommand(Command):
         print(f"Privacy: Skipping notes with 'sensitive: true' in frontmatter")
 
         # Process directory
-        stats = self._process_directory(target_dir, vault_root, api_key, args.dry_run, args.overwrite)
+        with DryRunContext(args.dry_run) as ctx:
+            self._process_directory(target_dir, vault_root, api_key, ctx, args.overwrite)
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
+            # Print custom summary
+            self._print_custom_summary(ctx)
 
-        if not args.dry_run and stats['processed'] > 0:
-            print(f"\nDone! Processed {stats['processed']} file{'s' if stats['processed'] != 1 else ''}.")
-        elif args.dry_run and stats['processed'] > 0:
-            print(f"\nDry run complete. {stats['processed']} file{'s' if stats['processed'] != 1 else ''} would be processed.")
-        else:
-            print("\nNo files processed.")
+            # Print standard dry-run summary
+            print_dry_run_summary(ctx)
+
+            if not args.dry_run and ctx.stats.files_processed > 0:
+                print(f"\nDone! Processed {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''}.")
+            elif args.dry_run and ctx.stats.files_processed > 0:
+                print(f"\nDry run complete. {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''} would be processed.")
+            else:
+                print("\nNo files processed.")
 
     def _get_top_tags_from_database(self, vault_root: Path, limit: int = 10) -> List[str]:
         """
@@ -565,10 +570,10 @@ Note content:
         directory: Path,
         vault_root: Path,
         api_key: str,
-        dry_run: bool = False,
+        ctx: DryRunContext,
         overwrite: bool = False,
         max_depth: int = 5
-    ) -> Dict:
+    ) -> None:
         """
         Recursively process all markdown files in a directory.
 
@@ -576,27 +581,11 @@ Note content:
             directory: Directory to process
             vault_root: Root directory of the vault
             api_key: Anthropic API key
-            dry_run: If True, preview changes without modifying files
+            ctx: DryRunContext for tracking operations
             overwrite: If True, replace existing tags
             max_depth: Maximum depth to recurse into subdirectories (default: 5)
-
-        Returns:
-            Dictionary with statistics
         """
-        stats = {
-            'total_files': 0,
-            'skipped_has_tags': 0,
-            'skipped_no_frontmatter': 0,
-            'skipped_sensitive': 0,
-            'skipped_too_deep': 0,
-            'processed': 0,
-            'failed': 0,
-            'failed_files': [],
-            'total_filtered_tags': 0,
-            'files_with_filtered_tags': 0
-        }
-
-        print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files (max depth: {max_depth})...")
+        print(f"\n{'DRY RUN - ' if ctx.dry_run else ''}Processing markdown files (max depth: {max_depth})...")
 
         # Note: iter_markdown_files uses rglob which traverses all depths
         # We'll need to manually check depth since there's no max_depth parameter
@@ -613,7 +602,7 @@ Note content:
             if current_depth > max_depth:
                 continue
 
-            stats['total_files'] += 1
+            ctx.stats.increment('total_files')
             relative_path = file_path.relative_to(vault_root)
 
             try:
@@ -624,7 +613,7 @@ Note content:
                 # Check if note is marked as sensitive
                 if FrontmatterManager.is_sensitive_note(content):
                     print(f"  Skipping (sensitive): {relative_path}")
-                    stats['skipped_sensitive'] += 1
+                    ctx.stats.increment('skipped_sensitive')
                     continue
 
                 # Extract frontmatter and check for existing tags
@@ -632,69 +621,67 @@ Note content:
 
                 if frontmatter is None:
                     print(f"  Skipping (no frontmatter): {relative_path}")
-                    stats['skipped_no_frontmatter'] += 1
+                    ctx.stats.increment('skipped_no_frontmatter')
                     continue
 
                 if existing_tags and not overwrite:
                     print(f"  Skipping (has tags): {relative_path}")
-                    stats['skipped_has_tags'] += 1
+                    ctx.stats.increment('skipped_has_tags')
                     continue
 
                 # Generate tags
-                print(f"  {'Would generate' if dry_run else 'Generating'} tags: {relative_path}")
+                print(f"  {'Would generate' if ctx.dry_run else 'Generating'} tags: {relative_path}")
                 tags, filtered_tags = self._generate_ai_tags(content, api_key, vault_root)
 
                 # Track filtered tags
                 if filtered_tags:
-                    stats['total_filtered_tags'] += len(filtered_tags)
-                    stats['files_with_filtered_tags'] += 1
+                    ctx.stats.increment('total_filtered_tags', len(filtered_tags))
+                    ctx.stats.increment('files_with_filtered_tags')
                     print(f"    → Valid tags: {', '.join(tags)}")
                     print(f"    → Filtered (invalid): {', '.join(filtered_tags)}")
                 else:
                     print(f"    → {', '.join(tags)}")
 
                 # Update file
-                if self._update_file_with_tags(file_path, tags, dry_run):
-                    stats['processed'] += 1
+                if self._update_file_with_tags(file_path, tags, ctx.dry_run):
+                    ctx.stats.increment('files_processed')
+                    ctx.record_change(
+                        file_path,
+                        f"Added {len(tags)} AI-generated tag(s)",
+                        tags=tags
+                    )
                 else:
-                    stats['failed'] += 1
-                    stats['failed_files'].append(str(relative_path))
+                    ctx.stats.increment('files_failed')
+                    ctx.stats.custom_stats.setdefault('failed_files', []).append(str(relative_path))
 
             except Exception as e:
                 print(f"  Error processing {relative_path}: {e}")
-                stats['failed'] += 1
-                stats['failed_files'].append(str(relative_path))
+                ctx.stats.increment('files_failed')
+                ctx.stats.custom_stats.setdefault('failed_files', []).append(str(relative_path))
 
-        return stats
-
-    def _print_summary(self, stats: Dict, dry_run: bool = False) -> None:
-        """Print summary of AI tag processing results."""
+    def _print_custom_summary(self, ctx: DryRunContext) -> None:
+        """Print custom summary of AI tag processing results."""
         print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
+        print("AI Tag Generation Details")
         print("=" * 60)
-        print(f"Total markdown files: {stats['total_files']}")
-        print(f"Skipped (has tags): {stats['skipped_has_tags']}")
-        print(f"Skipped (no frontmatter): {stats['skipped_no_frontmatter']}")
-        print(f"Skipped (sensitive): {stats['skipped_sensitive']}")
-        if stats.get('skipped_too_deep', 0) > 0:
-            print(f"Skipped (too deep): {stats['skipped_too_deep']}")
-        print(f"Successfully processed: {stats['processed']}")
-        print(f"Failed: {stats['failed']}")
+        print(f"Skipped (has tags): {ctx.stats.custom_stats.get('skipped_has_tags', 0)}")
+        print(f"Skipped (no frontmatter): {ctx.stats.custom_stats.get('skipped_no_frontmatter', 0)}")
+        print(f"Skipped (sensitive): {ctx.stats.custom_stats.get('skipped_sensitive', 0)}")
+
+        skipped_too_deep = ctx.stats.custom_stats.get('skipped_too_deep', 0)
+        if skipped_too_deep > 0:
+            print(f"Skipped (too deep): {skipped_too_deep}")
 
         # Report on filtered invalid tags
-        if stats.get('total_filtered_tags', 0) > 0:
+        total_filtered = ctx.stats.custom_stats.get('total_filtered_tags', 0)
+        if total_filtered > 0:
             print(f"\nTag Validation:")
-            print(f"Files with filtered tags: {stats['files_with_filtered_tags']}")
-            print(f"Total invalid tags filtered: {stats['total_filtered_tags']}")
+            print(f"Files with filtered tags: {ctx.stats.custom_stats.get('files_with_filtered_tags', 0)}")
+            print(f"Total invalid tags filtered: {total_filtered}")
             print(f"Note: Invalid tags were automatically removed (did not meet Obsidian rules)")
 
-        if stats['failed_files']:
-            print(f"\nFailed files ({len(stats['failed_files'])}):")
-            for file_path in stats['failed_files']:
+        failed_files = ctx.stats.custom_stats.get('failed_files', [])
+        if failed_files:
+            print(f"\nFailed files ({len(failed_files)}):")
+            for file_path in failed_files:
                 print(f"  - {file_path}")
-
-        if dry_run and stats['processed'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)
