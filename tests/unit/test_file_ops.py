@@ -96,7 +96,7 @@ class TestSafeRead:
         latin1_file.write_text("café", encoding='latin-1')
 
         # Should fail with UTF-8
-        content = safe_read(latin1_file, encoding='utf-8', silent=True)
+        safe_read(latin1_file, encoding='utf-8', silent=True)
         # May succeed or fail depending on content
 
         # Should succeed with correct encoding

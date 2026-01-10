@@ -88,7 +88,8 @@ def no_vault_db_exists(temp_vault, context):
     try:
         if context['db_path'].exists():
             context['db_path'].unlink()
-    except Exception:
+    except FileNotFoundError:
+        # If the file is removed between exists() and unlink(), it's already in the desired state.
         pass
 
 

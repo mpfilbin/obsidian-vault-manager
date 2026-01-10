@@ -250,9 +250,6 @@ class TestRebuildVaultDatabase:
             def execute(self, args):
                 pass
 
-        def mock_build_command():
-            return MockBuildCommand()
-
         # Mock the import
         import vault_manager.index.commands.build as build_module
         monkeypatch.setattr(build_module, 'BuildCommand', MockBuildCommand)

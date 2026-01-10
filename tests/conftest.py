@@ -7,8 +7,6 @@ This module provides common fixtures for testing vault management commands.
 import pytest
 import sqlite3
 from pathlib import Path
-from typing import Dict
-
 
 @pytest.fixture
 def temp_vault(tmp_path):
