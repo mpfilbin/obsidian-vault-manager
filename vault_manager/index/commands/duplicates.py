@@ -7,7 +7,6 @@ identical content (via SHA-256 hashing) and provides cleanup functionality.
 
 import re
 import shutil
-import sqlite3
 from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from datetime import datetime
@@ -15,7 +14,8 @@ from pathlib import Path
 from typing import Dict
 
 from . import Command
-from ..common import get_vault_root, get_database_path, format_file_size, get_file_extension_category
+from ..common import get_vault_root, format_file_size, get_file_extension_category
+from ...core.database import get_database_path, execute_query
 
 
 class DuplicatesCommand(Command):
@@ -59,12 +59,8 @@ class DuplicatesCommand(Command):
             print("Run 'vault index build' first to create the database.")
             return
 
-        # Query duplicate groups from database
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Get duplicate groups with file details (3NF: compute extension from path)
-        cursor.execute('''
+        # Query duplicate groups from database using centralized utility
+        rows = execute_query('''
             SELECT f.content_hash, f.file_path, f.size_bytes
             FROM files f
             WHERE f.content_hash IN (
@@ -75,10 +71,7 @@ class DuplicatesCommand(Command):
                 HAVING COUNT(*) > 1
             )
             ORDER BY f.content_hash, f.file_path
-        ''')
-
-        rows = cursor.fetchall()
-        conn.close()
+        ''', db_path=db_path)
 
         if not rows:
             print("\nNo duplicate files found!")
@@ -119,19 +112,16 @@ class DuplicatesCommand(Command):
     def _get_reference_counts(self) -> Dict[str, int]:
         """Get incoming reference counts for all files from links table."""
         db_path = get_database_path()
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
 
-        # Count incoming links for each file
-        cursor.execute('''
+        # Count incoming links for each file using centralized utility
+        rows = execute_query('''
             SELECT target_file, COUNT(*) as ref_count
             FROM links
             WHERE target_file IS NOT NULL
             GROUP BY target_file
-        ''')
+        ''', db_path=db_path)
 
-        ref_counts = {row[0]: row[1] for row in cursor.fetchall()}
-        conn.close()
+        ref_counts = {row[0]: row[1] for row in rows}
         return ref_counts
 
     def _generate_report(self, duplicate_groups: Dict) -> str:

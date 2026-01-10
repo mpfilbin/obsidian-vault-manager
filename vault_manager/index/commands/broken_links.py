@@ -5,14 +5,14 @@ This module implements the broken-links command which identifies unresolved
 wiki-links in the vault and generates a markdown report.
 """
 
-import sqlite3
 from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
-from ..common import get_database_path, get_vault_root
+from ..common import get_vault_root
+from ...core.database import get_database_path, execute_query
 from . import Command
 
 
@@ -36,19 +36,13 @@ class BrokenLinksCommand(Command):
 
         vault_root = get_vault_root()
 
-        # Query broken links from database
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-
-            # Get broken links grouped by source file (3NF: compute is_resolved from target_file)
-            cursor.execute('''
-                SELECT source_file, link_text, link_type, line_number
-                FROM links
-                WHERE target_file IS NULL
-                ORDER BY source_file, line_number
-            ''')
-
-            rows = cursor.fetchall()
+        # Query broken links from database (3NF: compute is_resolved from target_file)
+        rows = execute_query('''
+            SELECT source_file, link_text, link_type, line_number
+            FROM links
+            WHERE target_file IS NULL
+            ORDER BY source_file, line_number
+        ''', db_path=db_path)
 
         if not rows:
             print("\n✓ No broken links found!")

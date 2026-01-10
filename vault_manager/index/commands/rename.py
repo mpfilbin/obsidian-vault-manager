@@ -8,13 +8,13 @@ rename them with spaces instead.
 
 import os
 import re
-import sqlite3
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import List, Tuple
 
 from . import Command
-from ..common import get_vault_root, get_database_path
+from ..common import get_vault_root
+from ...core.database import get_database_path, execute_query
 
 
 class RenameCommand(Command):
@@ -173,10 +173,8 @@ class RenameCommand(Command):
             return []
 
         # Query all files from database
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT file_path FROM files ORDER BY file_path')
-            all_files = [row[0] for row in cursor.fetchall()]
+        results = execute_query('SELECT file_path FROM files ORDER BY file_path', db_path=db_path)
+        all_files = [row[0] for row in results]
 
         vault_root = get_vault_root()
         renames = []
@@ -476,10 +474,8 @@ class RenameCommand(Command):
 
         # Get all markdown files
         db_path = get_database_path()
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT file_path FROM files WHERE file_path LIKE '%.md'")
-            md_files = [row[0] for row in cursor.fetchall()]
+        results = execute_query("SELECT file_path FROM files WHERE file_path LIKE '%.md'", db_path=db_path)
+        md_files = [row[0] for row in results]
 
         # Update links in each markdown file
         for md_path in md_files:

@@ -12,14 +12,8 @@ from typing import Optional
 
 # Re-export core utilities
 from vault_manager.core import (
-    get_vault_root,
     is_ignored_path as core_is_ignored_path,
 )
-
-
-def get_database_path() -> Path:
-    """Get the path to the vault.db database file."""
-    return get_vault_root() / 'vault.db'
 
 
 def is_ignored_path(file_path: Path, vault_root: Path) -> bool:

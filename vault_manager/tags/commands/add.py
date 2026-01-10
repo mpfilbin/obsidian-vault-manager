@@ -7,7 +7,6 @@ appropriate tags for markdown files.
 
 import os
 import re
-import sqlite3
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
@@ -15,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 from . import Command
 from ..common import get_vault_root, extract_tags_from_frontmatter, is_valid_obsidian_tag
-from vault_manager.index.common import get_database_path
+from vault_manager.core.database import get_database_path, execute_query
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
@@ -149,23 +148,18 @@ class AddCommand(Command):
             return []
 
         try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
+            # 3NF: Compute file_count from file_tags table
+            results = execute_query('''
+                SELECT ft.tag
+                FROM file_tags ft
+                GROUP BY ft.tag
+                ORDER BY COUNT(*) DESC, ft.tag ASC
+                LIMIT ?
+            ''', (limit,), db_path=db_path)
 
-                # 3NF: Compute file_count from file_tags table
-                cursor.execute('''
-                    SELECT ft.tag
-                    FROM file_tags ft
-                    GROUP BY ft.tag
-                    ORDER BY COUNT(*) DESC, ft.tag ASC
-                    LIMIT ?
-                ''', (limit,))
+            return [tag for tag, in results]
 
-                results = cursor.fetchall()
-
-                return [tag for tag, in results]
-
-        except sqlite3.Error:
+        except Exception:
             # If there's any database error, return empty list
             return []
 
@@ -190,29 +184,24 @@ class AddCommand(Command):
             return {}
 
         try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
+            # Get all tags with their counts
+            tags_with_counts = execute_query('''
+                SELECT ft.tag, COUNT(*) as count
+                FROM file_tags ft
+                GROUP BY ft.tag
+                HAVING count >= ?
+                ORDER BY count DESC, ft.tag ASC
+            ''', (min_count,), db_path=db_path)
 
-                # Get all tags with their counts
-                cursor.execute('''
-                    SELECT ft.tag, COUNT(*) as count
-                    FROM file_tags ft
-                    GROUP BY ft.tag
-                    HAVING count >= ?
-                    ORDER BY count DESC, ft.tag ASC
-                ''', (min_count,))
+            # Build hierarchy
+            hierarchy = {}
 
-                tags_with_counts = cursor.fetchall()
-
-                # Build hierarchy
-                hierarchy = {}
-
-                for tag, count in tags_with_counts:
-                    self._add_tag_to_hierarchy(hierarchy, tag, count)
+            for tag, count in tags_with_counts:
+                self._add_tag_to_hierarchy(hierarchy, tag, count)
 
                 return hierarchy
 
-        except sqlite3.Error:
+        except Exception:
             # If there's any database error, return empty dict
             return {}
 

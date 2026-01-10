@@ -10,12 +10,13 @@ from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List
 
+from ...core.database import get_database_connection, get_database_path, transaction
+from ..common import get_vault_root, is_text_file
+from ..linker import Link, LinkExtractor
+from ..scanner import FileInfo, FileScanner
 from . import Command
-from ..common import get_vault_root, get_database_path, is_text_file
-from ..scanner import FileScanner, FileInfo
-from ..linker import LinkExtractor, Link
 
 
 class BuildCommand(Command):
@@ -96,7 +97,7 @@ class BuildCommand(Command):
         print("\n[Phase 3/5] Creating database...")
 
         try:
-            conn = self._create_database(db_path, force=args.force)
+            self._create_database(db_path, force=args.force)
             print(f"✓ Database initialized: {db_path}")
         except Exception as e:
             print(f"✗ Error creating database: {e}")
@@ -106,45 +107,42 @@ class BuildCommand(Command):
         print("\n[Phase 4/5] Populating database tables...")
 
         try:
-            conn.execute('BEGIN TRANSACTION')
+            with transaction(db_path) as conn:
+                # Populate files table
+                self._populate_files_table(conn, files)
+                print(f"  ✓ Files table: {len(files)} entries")
 
-            # Populate files table
-            self._populate_files_table(conn, files)
-            print(f"  ✓ Files table: {len(files)} entries")
+                # Populate tags and file_tags tables
+                tags_count = self._populate_tags_tables(conn, files)
+                print(f"  ✓ Tags table: {tags_count} unique tags")
 
-            # Populate tags and file_tags tables
-            tags_count = self._populate_tags_tables(conn, files)
-            print(f"  ✓ Tags table: {tags_count} unique tags")
+                # Populate links table
+                self._populate_links_table(conn, all_links)
+                print(f"  ✓ Links table: {len(all_links)} links")
 
-            # Populate links table
-            self._populate_links_table(conn, all_links)
-            print(f"  ✓ Links table: {len(all_links)} links")
+                # Update metadata
+                self._populate_metadata_table(conn, files, all_links, vault_root)
+                print(f"  ✓ Metadata table: statistics recorded")
 
-            # Update metadata
-            self._populate_metadata_table(conn, files, all_links, vault_root)
-            print(f"  ✓ Metadata table: statistics recorded")
-
-            conn.commit()
+                # Transaction automatically commits on successful exit
             print("✓ All tables populated successfully")
 
         except Exception as e:
-            conn.rollback()
+            # Transaction automatically rolled back on exception
             print(f"\n✗ Error populating database: {e}")
             print("All changes rolled back.")
-            conn.close()
             return
 
         # Phase 5: Optimize
         print("\n[Phase 5/5] Optimizing database...")
 
         try:
-            conn.execute('VACUUM')
-            conn.execute('ANALYZE')
+            with get_database_connection(db_path) as conn:
+                conn.execute('VACUUM')
+                conn.execute('ANALYZE')
             print("✓ Database optimized")
         except Exception as e:
             print(f"Warning: Optimization failed: {e}")
-
-        conn.close()
 
         # Print Summary
         print("\n" + "=" * 60)
@@ -183,73 +181,77 @@ class BuildCommand(Command):
 
         return all_links
 
-    def _create_database(self, db_path: Path, force: bool = False) -> sqlite3.Connection:
-        """Create database and schema."""
+    def _create_database(self, db_path: Path, force: bool = False) -> None:
+        """
+        Create database and schema.
+
+        Uses centralized database connection management to ensure
+        connections are properly closed.
+        """
         # Remove existing database if force rebuild
         if force and db_path.exists():
             db_path.unlink()
             print("  Removed existing database")
 
-        conn = sqlite3.connect(db_path)
-        conn.execute('PRAGMA foreign_keys = ON')
-        cursor = conn.cursor()
+        with get_database_connection(db_path) as conn:
+            cursor = conn.cursor()
 
-        # Create tables
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS metadata (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        ''')
+            # Create tables
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            ''')
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS files (
-                file_path TEXT PRIMARY KEY,
-                size_bytes INTEGER NOT NULL,
-                content_hash TEXT,
-                last_modified TEXT NOT NULL,
-                created TEXT,
-                has_frontmatter INTEGER DEFAULT 0
-            )
-        ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS files (
+                    file_path TEXT PRIMARY KEY,
+                    size_bytes INTEGER NOT NULL,
+                    content_hash TEXT,
+                    last_modified TEXT NOT NULL,
+                    created TEXT,
+                    has_frontmatter INTEGER DEFAULT 0
+                )
+            ''')
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tags (
-                tag TEXT PRIMARY KEY
-            )
-        ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tags (
+                    tag TEXT PRIMARY KEY
+                )
+            ''')
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS file_tags (
-                tag TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                PRIMARY KEY (tag, file_path),
-                FOREIGN KEY (tag) REFERENCES tags(tag) ON DELETE CASCADE,
-                FOREIGN KEY (file_path) REFERENCES files(file_path) ON DELETE CASCADE
-            )
-        ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS file_tags (
+                    tag TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    PRIMARY KEY (tag, file_path),
+                    FOREIGN KEY (tag) REFERENCES tags(tag) ON DELETE CASCADE,
+                    FOREIGN KEY (file_path) REFERENCES files(file_path) ON DELETE CASCADE
+                )
+            ''')
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS links (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_file TEXT NOT NULL,
-                target_file TEXT,
-                link_type TEXT NOT NULL,
-                link_text TEXT,
-                line_number INTEGER,
-                FOREIGN KEY (source_file) REFERENCES files(file_path) ON DELETE CASCADE,
-                FOREIGN KEY (target_file) REFERENCES files(file_path) ON DELETE SET NULL
-            )
-        ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_file TEXT NOT NULL,
+                    target_file TEXT,
+                    link_type TEXT NOT NULL,
+                    link_text TEXT,
+                    line_number INTEGER,
+                    FOREIGN KEY (source_file) REFERENCES files(file_path) ON DELETE CASCADE,
+                    FOREIGN KEY (target_file) REFERENCES files(file_path) ON DELETE SET NULL
+                )
+            ''')
 
-        # Create normalized views (3NF: compute derived values)
-        self._create_views(cursor)
+            # Create normalized views (3NF: compute derived values)
+            self._create_views(cursor)
 
-        # Create indexes
-        self._create_indexes(cursor)
+            # Create indexes
+            self._create_indexes(cursor)
 
-        conn.commit()
-        return conn
+            conn.commit()
+            # Connection automatically closed on context exit
 
     def _create_views(self, cursor: sqlite3.Cursor) -> None:
         """

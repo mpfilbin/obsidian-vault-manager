@@ -7,16 +7,15 @@ showing the hierarchical structure of tags with interactive node layout.
 
 import json
 import random
-import sqlite3
 import sys
 from argparse import ArgumentParser, Namespace
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
-from . import Command
+from vault_manager.core.database import execute_query, get_database_path
+
 from ..common import get_vault_root
-from vault_manager.index.common import get_database_path
+from . import Command
 
 
 class VisualizeCommand(Command):
@@ -85,20 +84,15 @@ class VisualizeCommand(Command):
         Returns:
             Dictionary mapping tag names to file counts
         """
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
+        results = execute_query('''
+            SELECT ft.tag, COUNT(*) as file_count
+            FROM file_tags ft
+            GROUP BY ft.tag
+            HAVING file_count >= ?
+            ORDER BY ft.tag
+        ''', (min_count,), db_path=db_path)
 
-            cursor.execute('''
-                SELECT ft.tag, COUNT(*) as file_count
-                FROM file_tags ft
-                GROUP BY ft.tag
-                HAVING file_count >= ?
-                ORDER BY ft.tag
-            ''', (min_count,))
-
-            tag_data = {tag: count for tag, count in cursor.fetchall()}
-
-        return tag_data
+        return {tag: count for tag, count in results}
 
     def _analyze_hierarchy(self, tag_data: Dict[str, int]) -> Dict[str, any]:
         """

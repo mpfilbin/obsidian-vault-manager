@@ -8,14 +8,14 @@ structures (parent/child relationships using Obsidian's tag/subtag syntax).
 
 import json
 import os
-import sqlite3
 import sys
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 from vault_manager.core.command import Command
+from vault_manager.core.database import execute_query
 from vault_manager.core.vault import get_vault_root
 
 
@@ -127,20 +127,15 @@ class ReorganizeCommand(Command):
 
     def _load_tags(self, db_path: Path, min_count: int) -> Dict[str, int]:
         """Load tags and their counts from the database."""
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
+        results = execute_query("""
+            SELECT tag, COUNT(*) as count
+            FROM file_tags
+            GROUP BY tag
+            HAVING count >= ?
+            ORDER BY count DESC
+        """, (min_count,), db_path=db_path)
 
-            cursor.execute("""
-                SELECT tag, COUNT(*) as count
-                FROM file_tags
-                GROUP BY tag
-                HAVING count >= ?
-                ORDER BY count DESC
-            """, (min_count,))
-
-            tags_data = {tag: count for tag, count in cursor.fetchall()}
-
-        return tags_data
+        return {tag: count for tag, count in results}
 
     def _categorize_tags(self, tags_data: Dict[str, int]) -> Tuple[List[str], List[str]]:
         """Separate hierarchical tags (with /) from flat tags."""

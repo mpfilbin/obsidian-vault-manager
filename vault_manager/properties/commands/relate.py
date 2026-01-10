@@ -7,7 +7,6 @@ similarity algorithm and adds related property with wiki-links to similar notes.
 
 import os
 import re
-import sqlite3
 import sys
 from argparse import ArgumentParser, Namespace
 from collections import Counter
@@ -16,7 +15,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from . import Command
 from ..common import get_vault_root, extract_frontmatter
-from vault_manager.index.common import get_database_path
+from vault_manager.core.database import get_database_path, execute_query
 from vault_manager.core.vault import iter_markdown_files
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
@@ -158,21 +157,16 @@ class RelateCommand(Command):
             return None
 
         try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
+            # 3NF: Compute file_count from file_tags table
+            results = execute_query('''
+                SELECT ft.tag, COUNT(*) as file_count
+                FROM file_tags ft
+                GROUP BY ft.tag
+            ''', db_path=db_path)
 
-                # 3NF: Compute file_count from file_tags table
-                cursor.execute('''
-                    SELECT ft.tag, COUNT(*) as file_count
-                    FROM file_tags ft
-                    GROUP BY ft.tag
-                ''')
+            return {tag: count for tag, count in results}
 
-                results = cursor.fetchall()
-
-                return {tag: count for tag, count in results}
-
-        except sqlite3.Error:
+        except Exception:
             # If there's any database error, return None
             return None
 
