@@ -10,8 +10,14 @@ from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import List
 
+from vault_manager.core.database import (
+    execute_query,
+    execute_query_with_columns,
+    execute_single,
+    get_database_path,
+)
+
 from . import Command
-from vault_manager.core.database import get_database_path, execute_query, execute_query_with_columns, execute_single
 
 
 class QueryCommand(Command):
@@ -162,17 +168,22 @@ class QueryCommand(Command):
         """Query for files tagged with ALL specified tags."""
         print(f"Files tagged with ALL of: {', '.join(tags)}\n")
 
-        # Build query to find files with all specified tags
-        # Using INTERSECT for each tag
-        query_parts = []
-        for tag in tags:
-            query_parts.append(f"SELECT file_path FROM file_tags WHERE tag = '{tag}'")
-
-        query = "\nINTERSECT\n".join(query_parts)
-        query += "\nORDER BY file_path"
+        # Build parameterized query using GROUP BY and HAVING
+        # This finds files that have all the specified tags
+        placeholders = ','.join('?' * len(tags))
+        query = f'''
+            SELECT file_path
+            FROM file_tags
+            WHERE tag IN ({placeholders})
+            GROUP BY file_path
+            HAVING COUNT(DISTINCT tag) = ?
+            ORDER BY file_path
+        '''
 
         try:
-            results = execute_query(query, db_path=db_path)
+            # Parameters: all tags + count of tags
+            params = tuple(tags) + (len(tags),)
+            results = execute_query(query, params, db_path=db_path)
 
             if not results:
                 print(f"No files found with all tags: {', '.join(tags)}")
@@ -267,7 +278,7 @@ class QueryCommand(Command):
         print(f"  Total tag instances: {metadata.get('total_tag_instances', 'Unknown')}")
 
         # Calculate averages
-        total_files = int(metadata.get('total_files', 0))
+
         total_tagged_files = int(metadata.get('total_tagged_files', 0))
         total_tag_instances = int(metadata.get('total_tag_instances', 0))
 
