@@ -8,8 +8,8 @@ particularly for rebuilding the vault index database.
 
 import sys
 from argparse import Namespace
-from typing import Optional
 from functools import wraps
+from typing import Optional
 
 
 def rebuild_vault_database(silent: bool = False, verbose: bool = False) -> bool:
@@ -82,34 +82,33 @@ def get_database_stats(db_path) -> dict:
     import sqlite3
 
     try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
 
-        stats = {}
+            stats = {}
 
-        # Get total files
-        cursor.execute("SELECT COUNT(*) FROM files")
-        stats['total_files'] = cursor.fetchone()[0]
+            # Get total files
+            cursor.execute("SELECT COUNT(*) FROM files")
+            stats['total_files'] = cursor.fetchone()[0]
 
-        # Get total tags
-        cursor.execute("SELECT COUNT(DISTINCT tag) FROM file_tags")
-        stats['total_tags'] = cursor.fetchone()[0]
+            # Get total tags
+            cursor.execute("SELECT COUNT(DISTINCT tag) FROM file_tags")
+            stats['total_tags'] = cursor.fetchone()[0]
 
-        # Get total links
-        cursor.execute("SELECT COUNT(*) FROM links")
-        stats['total_links'] = cursor.fetchone()[0]
+            # Get total links
+            cursor.execute("SELECT COUNT(*) FROM links")
+            stats['total_links'] = cursor.fetchone()[0]
 
-        # Get files with frontmatter
-        cursor.execute("SELECT COUNT(*) FROM files WHERE has_frontmatter = 1")
-        stats['files_with_frontmatter'] = cursor.fetchone()[0]
+            # Get files with frontmatter
+            cursor.execute("SELECT COUNT(*) FROM files WHERE has_frontmatter = 1")
+            stats['files_with_frontmatter'] = cursor.fetchone()[0]
 
-        # Get metadata
-        cursor.execute("SELECT key, value FROM metadata")
-        for key, value in cursor.fetchall():
-            stats[key] = value
+            # Get metadata
+            cursor.execute("SELECT key, value FROM metadata")
+            for key, value in cursor.fetchall():
+                stats[key] = value
 
-        conn.close()
-        return stats
+            return stats
 
     except Exception as e:
         return {'error': str(e)}
@@ -145,7 +144,7 @@ def require_database(vault_root, command_name: str = "this command") -> None:
         >> require_database(get_vault_root(), "query")
     """
     if not database_exists(vault_root):
-        print(f"\nError: vault.db not found.")
+        print("\nError: vault.db not found.")
         print(f"Run 'vault tags update' or 'vault index build' before using {command_name}.")
         sys.exit(1)
 

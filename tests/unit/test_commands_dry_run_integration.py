@@ -50,40 +50,39 @@ def vault_database(temp_vault):
     """Create a vault.db database."""
     db_path = temp_vault / "vault.db"
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-    # Create minimal schema
-    cursor.execute("""
-        CREATE TABLE metadata (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-    """)
+        # Create minimal schema
+        cursor.execute("""
+            CREATE TABLE metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
 
-    cursor.execute("""
-        CREATE TABLE files (
-            file_path TEXT PRIMARY KEY,
-            size_bytes INTEGER NOT NULL
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE files (
+                file_path TEXT PRIMARY KEY,
+                size_bytes INTEGER NOT NULL
+            )
+        """)
 
-    cursor.execute("""
-        CREATE TABLE tags (
-            tag TEXT PRIMARY KEY
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE tags (
+                tag TEXT PRIMARY KEY
+            )
+        """)
 
-    cursor.execute("""
-        CREATE TABLE file_tags (
-            tag TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            PRIMARY KEY (tag, file_path)
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE file_tags (
+                tag TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                PRIMARY KEY (tag, file_path)
+            )
+        """)
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
     return db_path
 

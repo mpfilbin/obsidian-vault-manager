@@ -12,8 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
+from ..common import get_database_path, get_vault_root
 from . import Command
-from ..common import get_vault_root, get_database_path
 
 
 class BrokenLinksCommand(Command):
@@ -37,19 +37,18 @@ class BrokenLinksCommand(Command):
         vault_root = get_vault_root()
 
         # Query broken links from database
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
 
-        # Get broken links grouped by source file (3NF: compute is_resolved from target_file)
-        cursor.execute('''
-            SELECT source_file, link_text, link_type, line_number
-            FROM links
-            WHERE target_file IS NULL
-            ORDER BY source_file, line_number
-        ''')
+            # Get broken links grouped by source file (3NF: compute is_resolved from target_file)
+            cursor.execute('''
+                SELECT source_file, link_text, link_type, line_number
+                FROM links
+                WHERE target_file IS NULL
+                ORDER BY source_file, line_number
+            ''')
 
-        rows = cursor.fetchall()
-        conn.close()
+            rows = cursor.fetchall()
 
         if not rows:
             print("\n✓ No broken links found!")
