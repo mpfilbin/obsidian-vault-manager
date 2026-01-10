@@ -5,49 +5,30 @@ Quick reference for testing the Library vault management tools.
 ## Quick Start
 
 ```bash
-# Install with test dependencies
 pip install -e ".[test]"
-
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=Library --cov-report=term-missing
+pytest                     # runs with config from pyproject.toml
+pytest --cov=vault_manager --cov-report=term-missing --cov-report=html
 ```
 
 ## Test Organization
 
-- **BDD Tests** (`features/`) - Behavior-driven tests in Gherkin syntax
-- **Unit Tests** (`unit/`) - Traditional pytest unit tests
-- **Fixtures** (`conftest.py`) - Shared test fixtures and utilities
+- **BDD Tests** (`tests/features/`) - Behavior-driven tests in Gherkin syntax
+- **Unit Tests** (`tests/unit/`) - Traditional pytest unit tests
+- **Fixtures** (`tests/conftest.py`) - Shared test fixtures and utilities
 
 ## Common Commands
 
 ```bash
-# Run specific test file
-pytest Library/tests/features/tags_missing.feature
-
-# Run tests by marker
-pytest -m unit              # Only unit tests
-pytest -m bdd               # Only BDD tests
-pytest -m tags              # Only tag-related tests
-
-# Verbose output
-pytest -v                   # Verbose
-pytest -vv                  # Very verbose with locals
-
-# Coverage
-pytest --cov=Library --cov-report=html
-open htmlcov/index.html     # View coverage report
-
-# Debug
-pytest --pdb                # Drop into debugger on failure
-pytest -x                   # Stop on first failure
-pytest --lf                 # Run last failed tests
-
-# Performance
-pytest -m "not slow"        # Skip slow tests
-pytest --duration=10        # Show 10 slowest tests
+pytest tests/unit/test_vault_utilities.py
+pytest -m unit                # Only unit tests
+pytest -m bdd                 # Only BDD tests
+pytest --cov=vault_manager --cov-report=html
+open htmlcov/index.html       # View coverage report
+pytest --pdb                  # Drop into debugger on failure
+pytest -x                     # Stop on first failure
+pytest --lf                   # Run last failed tests
+pytest -m "not slow"          # Skip slow tests
+pytest --duration=10          # Show 10 slowest tests
 ```
 
 ## Writing Tests
@@ -106,28 +87,23 @@ class TestMyFunction:
 
 ## Test Markers
 
+Available markers (defined in `pyproject.toml`):
+- `unit` - Unit tests
+- `bdd` - BDD tests
+- `requires_vault` - Needs real vault
+- `requires_ai` - Needs AI API access
+
 Apply markers to organize tests:
 
 ```python
 @pytest.mark.unit
-@pytest.mark.tags
 def test_tag_parsing():
-    pass
+    ...
 
-@pytest.mark.slow
 @pytest.mark.requires_vault
 def test_full_scan():
-    pass
+    ...
 ```
-
-Available markers:
-- `unit` - Unit tests
-- `integration` - Integration tests
-- `bdd` - BDD tests
-- `tags`, `images`, `properties`, `index` - Domain-specific
-- `slow` - Slow-running tests
-- `requires_vault` - Needs real vault
-- `requires_ai` - Needs AI API access
 
 ## Fixtures
 
@@ -187,13 +163,10 @@ jobs:
 4. **Use `--lf`** - Re-run only failed tests
 5. **Use `-vv --showlocals`** - Show all local variables
 
-## Coverage Goals
+## Coverage
 
-Target coverage levels:
-- Overall: >80%
-- Core utilities: >90%
-- Commands: >75%
-- Edge cases: All known errors tested
+- Default HTML output goes to `htmlcov/` (set by `--cov-report=html`).
+- Sources and omit rules are configured in `pyproject.toml` under `[tool.coverage.*]`.
 
 ## Best Practices
 
@@ -212,6 +185,11 @@ Target coverage levels:
 - [pytest-bdd documentation](https://pytest-bdd.readthedocs.io/)
 - [Gherkin syntax reference](https://cucumber.io/docs/gherkin/reference/)
 - **Detailed guide**: See `Library/tests/README.md`
+
+## Configuration
+
+- Pytest reads settings from `pyproject.toml` (`[tool.pytest.ini_options]`).
+- No `pytest.ini` is required. Adjust markers, addopts, or testpaths there.
 
 ## Getting Help
 

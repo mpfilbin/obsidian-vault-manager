@@ -109,20 +109,19 @@ class SimilarCommand(Command):
         Returns:
             Dictionary mapping tag name to count
         """
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
 
-        # Query tags with counts
-        cursor.execute("""
-            SELECT tag, COUNT(*) as count
-            FROM file_tags
-            GROUP BY tag
-            HAVING count >= ?
-            ORDER BY tag
-        """, (min_count,))
+            # Query tags with counts
+            cursor.execute("""
+                SELECT tag, COUNT(*) as count
+                FROM file_tags
+                GROUP BY tag
+                HAVING count >= ?
+                ORDER BY tag
+            """, (min_count,))
 
-        tags_data = {tag: count for tag, count in cursor.fetchall()}
-        conn.close()
+            tags_data = {tag: count for tag, count in cursor.fetchall()}
 
         return tags_data
 

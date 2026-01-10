@@ -158,20 +158,19 @@ class RelateCommand(Command):
             return None
 
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
 
-            # 3NF: Compute file_count from file_tags table
-            cursor.execute('''
-                SELECT ft.tag, COUNT(*) as file_count
-                FROM file_tags ft
-                GROUP BY ft.tag
-            ''')
+                # 3NF: Compute file_count from file_tags table
+                cursor.execute('''
+                    SELECT ft.tag, COUNT(*) as file_count
+                    FROM file_tags ft
+                    GROUP BY ft.tag
+                ''')
 
-            results = cursor.fetchall()
-            conn.close()
+                results = cursor.fetchall()
 
-            return {tag: count for tag, count in results}
+                return {tag: count for tag, count in results}
 
         except sqlite3.Error:
             # If there's any database error, return None

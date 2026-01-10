@@ -173,11 +173,10 @@ class RenameCommand(Command):
             return []
 
         # Query all files from database
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT file_path FROM files ORDER BY file_path')
-        all_files = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT file_path FROM files ORDER BY file_path')
+            all_files = [row[0] for row in cursor.fetchall()]
 
         vault_root = get_vault_root()
         renames = []
@@ -477,11 +476,10 @@ class RenameCommand(Command):
 
         # Get all markdown files
         db_path = get_database_path()
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT file_path FROM files WHERE file_path LIKE '%.md'")
-        md_files = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT file_path FROM files WHERE file_path LIKE '%.md'")
+            md_files = [row[0] for row in cursor.fetchall()]
 
         # Update links in each markdown file
         for md_path in md_files:

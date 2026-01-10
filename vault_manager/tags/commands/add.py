@@ -149,22 +149,21 @@ class AddCommand(Command):
             return []
 
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
 
-            # 3NF: Compute file_count from file_tags table
-            cursor.execute('''
-                SELECT ft.tag
-                FROM file_tags ft
-                GROUP BY ft.tag
-                ORDER BY COUNT(*) DESC, ft.tag ASC
-                LIMIT ?
-            ''', (limit,))
+                # 3NF: Compute file_count from file_tags table
+                cursor.execute('''
+                    SELECT ft.tag
+                    FROM file_tags ft
+                    GROUP BY ft.tag
+                    ORDER BY COUNT(*) DESC, ft.tag ASC
+                    LIMIT ?
+                ''', (limit,))
 
-            results = cursor.fetchall()
-            conn.close()
+                results = cursor.fetchall()
 
-            return [tag for tag, in results]
+                return [tag for tag, in results]
 
         except sqlite3.Error:
             # If there's any database error, return empty list
@@ -191,28 +190,27 @@ class AddCommand(Command):
             return {}
 
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
 
-            # Get all tags with their counts
-            cursor.execute('''
-                SELECT ft.tag, COUNT(*) as count
-                FROM file_tags ft
-                GROUP BY ft.tag
-                HAVING count >= ?
-                ORDER BY count DESC, ft.tag ASC
-            ''', (min_count,))
+                # Get all tags with their counts
+                cursor.execute('''
+                    SELECT ft.tag, COUNT(*) as count
+                    FROM file_tags ft
+                    GROUP BY ft.tag
+                    HAVING count >= ?
+                    ORDER BY count DESC, ft.tag ASC
+                ''', (min_count,))
 
-            tags_with_counts = cursor.fetchall()
-            conn.close()
+                tags_with_counts = cursor.fetchall()
 
-            # Build hierarchy
-            hierarchy = {}
+                # Build hierarchy
+                hierarchy = {}
 
-            for tag, count in tags_with_counts:
-                self._add_tag_to_hierarchy(hierarchy, tag, count)
+                for tag, count in tags_with_counts:
+                    self._add_tag_to_hierarchy(hierarchy, tag, count)
 
-            return hierarchy
+                return hierarchy
 
         except sqlite3.Error:
             # If there's any database error, return empty dict

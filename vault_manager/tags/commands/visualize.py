@@ -85,19 +85,18 @@ class VisualizeCommand(Command):
         Returns:
             Dictionary mapping tag names to file counts
         """
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute('''
-            SELECT ft.tag, COUNT(*) as file_count
-            FROM file_tags ft
-            GROUP BY ft.tag
-            HAVING file_count >= ?
-            ORDER BY ft.tag
-        ''', (min_count,))
+            cursor.execute('''
+                SELECT ft.tag, COUNT(*) as file_count
+                FROM file_tags ft
+                GROUP BY ft.tag
+                HAVING file_count >= ?
+                ORDER BY ft.tag
+            ''', (min_count,))
 
-        tag_data = {tag: count for tag, count in cursor.fetchall()}
-        conn.close()
+            tag_data = {tag: count for tag, count in cursor.fetchall()}
 
         return tag_data
 
