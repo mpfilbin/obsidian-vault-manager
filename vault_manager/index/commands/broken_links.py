@@ -11,8 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
-from ..common import get_vault_root
-from ...core.database import get_database_path, execute_query
+from ...core import get_vault_root
+from ...core.database import execute_query, get_database_path
 from . import Command
 
 

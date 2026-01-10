@@ -6,16 +6,17 @@ Tests that database connections are properly cleaned up and no resource
 leaks occur during normal operation or error conditions.
 """
 
-import pytest
 import sqlite3
 
+import pytest
+
 from vault_manager.core.database import (
-    get_database_connection,
-    transaction,
+    execute_many,
     execute_query,
     execute_single,
     execute_write,
-    execute_many,
+    get_database_connection,
+    transaction,
 )
 
 

@@ -317,11 +317,10 @@ class TestAddCommandIntegration:
 
         with patch('vault_manager.tags.commands.add.get_vault_root', return_value=vault_with_tagged_notes):
             with patch('vault_manager.core.vault.get_vault_root', return_value=vault_with_tagged_notes):
-                with patch('vault_manager.index.common.get_vault_root', return_value=vault_with_tagged_notes):
-                    cmd = AddCommand()
-                    args = Namespace(directory='.', dry_run=True, overwrite=False)
+                cmd = AddCommand()
+                args = Namespace(directory='.', dry_run=True, overwrite=False)
 
-                    cmd.execute(args)
+                cmd.execute(args)
 
         untagged_after = (vault_with_tagged_notes / 'untagged.md').read_text()
         assert untagged_after == untagged_original, "Dry-run should not modify files"
@@ -335,11 +334,10 @@ class TestAddCommandIntegration:
 
         with patch('vault_manager.tags.commands.add.get_vault_root', return_value=vault_with_tagged_notes):
             with patch('vault_manager.core.vault.get_vault_root', return_value=vault_with_tagged_notes):
-                with patch('vault_manager.index.common.get_vault_root', return_value=vault_with_tagged_notes):
-                    cmd = AddCommand()
-                    args = Namespace(directory='.', dry_run=True, overwrite=False)
+                cmd = AddCommand()
+                args = Namespace(directory='.', dry_run=True, overwrite=False)
 
-                    cmd.execute(args)
+                cmd.execute(args)
 
         captured = capsys.readouterr()
         output = captured.out
@@ -359,13 +357,12 @@ class TestRelateCommandIntegration:
 
         with patch('vault_manager.properties.commands.relate.get_vault_root', return_value=vault_with_tagged_notes):
             with patch('vault_manager.core.vault.get_vault_root', return_value=vault_with_tagged_notes):
-                with patch('vault_manager.index.common.get_vault_root', return_value=vault_with_tagged_notes):
-                    cmd = RelateCommand()
-                    args = Namespace(path='.', dry_run=True, overwrite=False, max_related=5)
+                cmd = RelateCommand()
+                args = Namespace(path='.', dry_run=True, overwrite=False, max_related=5)
 
-                    # Mock the similarity calculation to avoid complex setup
-                    with patch.object(cmd, '_find_related_notes', return_value={}):
-                        cmd.execute(args)
+                # Mock the similarity calculation to avoid complex setup
+                with patch.object(cmd, '_find_related_notes', return_value={}):
+                    cmd.execute(args)
 
         note1_after = (vault_with_tagged_notes / 'note1.md').read_text()
         assert note1_after == note1_original, "Dry-run should not modify files"
@@ -376,12 +373,11 @@ class TestRelateCommandIntegration:
 
         with patch('vault_manager.properties.commands.relate.get_vault_root', return_value=vault_with_tagged_notes):
             with patch('vault_manager.core.vault.get_vault_root', return_value=vault_with_tagged_notes):
-                with patch('vault_manager.index.common.get_vault_root', return_value=vault_with_tagged_notes):
-                    cmd = RelateCommand()
-                    args = Namespace(path='.', dry_run=True, overwrite=False, max_related=5)
+                cmd = RelateCommand()
+                args = Namespace(path='.', dry_run=True, overwrite=False, max_related=5)
 
-                    with patch.object(cmd, '_find_related_notes', return_value={}):
-                        cmd.execute(args)
+                with patch.object(cmd, '_find_related_notes', return_value={}):
+                    cmd.execute(args)
 
         captured = capsys.readouterr()
         output = captured.out
