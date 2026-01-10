@@ -18,10 +18,10 @@ Commands:
     check    - Check database integrity and find issues
 
 Usage:
-    python -m Library.index build              # Full rebuild
-    python -m Library.index build --incremental  # Update changed files
-    python -m Library.index query --orphans     # Find orphaned files
-    python -m Library.index stats               # Show statistics
+    vault index build              # Full rebuild
+    vault index build --incremental  # Update changed files
+    vault index query --orphans     # Find orphaned files
+    vault index stats               # Show statistics
 
 Database:
     vault.db - SQLite database in vault root

@@ -1,6 +1,20 @@
-# Library Tests
+# Testing Guide
 
-This directory contains comprehensive tests for the Library vault management tools using pytest and pytest-bdd.
+This directory contains comprehensive tests for the vault management tools using pytest and pytest-bdd.
+
+## Quick Start
+
+```bash
+# Install test dependencies
+pip install -e ".[test]"
+
+# Run all tests with coverage
+pytest
+pytest --cov=vault_manager --cov-report=term-missing --cov-report=html
+
+# View coverage report
+open htmlcov/index.html
+```
 
 ## Test Structure
 
@@ -15,7 +29,8 @@ tests/
 │   └── test_tags_missing_steps.py
 ├── unit/                   # Traditional unit tests
 │   └── test_frontmatter_parsing.py
-└── fixtures/               # Test data and fixtures
+├── scripts/                # Helper scripts for testing
+└── README.md               # This file
 ```
 
 ## Installation
@@ -23,10 +38,10 @@ tests/
 Install test dependencies:
 
 ```bash
-# Install with test dependencies
+# Install with test dependencies only
 pip install -e ".[test]"
 
-# Or install with all development dependencies (includes AI features)
+# Or install with all development dependencies (includes AI features and tests)
 pip install -e ".[dev]"
 ```
 
@@ -43,11 +58,17 @@ pytest -v
 
 # Run with detailed output (show locals on failure)
 pytest -vv --showlocals
+
+# Stop on first failure
+pytest -x
 ```
 
 ### Run Specific Test Types
 
 ```bash
+# Run specific test file
+pytest tests/unit/test_vault_utilities.py
+
 # Run only BDD tests
 pytest -m bdd
 
@@ -55,41 +76,40 @@ pytest -m bdd
 pytest -m unit
 
 # Run tests for specific domain
-pytest -m tags
-pytest -m images
-pytest -m properties
-pytest -m index
-```
+pytest -m tags              # Tag management tests
+pytest -m images            # Image management tests
+pytest -m properties        # Properties management tests
+pytest -m index             # Index management tests
 
-### Run Specific Test Files
+# Skip slow tests
+pytest -m "not slow"
 
-```bash
-# Run a specific feature
-pytest Library/tests/features/tags_missing.feature
+# Run last failed tests
+pytest --lf
 
-# Run a specific unit test file
-pytest Library/tests/unit/test_frontmatter_parsing.py
-
-# Run a specific test function
-pytest Library/tests/unit/test_frontmatter_parsing.py::test_extract_valid_frontmatter
+# Run failed tests first
+pytest --ff
 ```
 
 ### Coverage Reporting
 
 ```bash
-# Run tests with coverage report
-pytest --cov=Library --cov-report=term-missing
+# Run tests with coverage
+pytest --cov=vault_manager --cov-report=term-missing
 
 # Generate HTML coverage report
-pytest --cov=Library --cov-report=html
+pytest --cov=vault_manager --cov-report=html
 
 # View HTML report (opens in browser)
 open htmlcov/index.html
+
+# Show slowest tests
+pytest --duration=10
 ```
 
-## Test Categories
+## Test Categories and Markers
 
-Tests are organized using pytest markers:
+Tests are organized using pytest markers (defined in `pyproject.toml`):
 
 - **`@pytest.mark.unit`** - Unit tests for individual functions/classes
 - **`@pytest.mark.integration`** - Integration tests for command workflows
@@ -101,6 +121,18 @@ Tests are organized using pytest markers:
 - **`@pytest.mark.slow`** - Tests that take significant time
 - **`@pytest.mark.requires_vault`** - Tests requiring a real vault structure
 - **`@pytest.mark.requires_ai`** - Tests requiring AI API access
+
+Apply markers to organize tests:
+
+```python
+@pytest.mark.unit
+def test_tag_parsing():
+    ...
+
+@pytest.mark.requires_vault
+def test_full_scan():
+    ...
+```
 
 ## Writing BDD Tests
 
@@ -160,13 +192,43 @@ def check_count(context, count):
     pass
 ```
 
+### BDD Example from docs/TESTING.md
+
+**Feature File** (`features/my_feature.feature`):
+```gherkin
+Feature: My Feature
+  Scenario: Test something
+    Given some context
+    When I do something
+    Then I expect a result
+```
+
+**Step Definitions** (`step_defs/test_my_feature_steps.py`):
+```python
+from pytest_bdd import scenarios, given, when, then
+
+scenarios('../features/my_feature.feature')
+
+@given('some context')
+def setup_context(context):
+    context['data'] = "test"
+
+@when('I do something')
+def perform_action(context):
+    context['result'] = process(context['data'])
+
+@then('I expect a result')
+def check_result(context):
+    assert context['result'] == "expected"
+```
+
 ## Writing Unit Tests
 
 Unit tests use standard pytest syntax:
 
 ```python
 import pytest
-from Library.module import function
+from vault_manager.module import function
 
 class TestFeature:
     """Group related tests in a class."""
@@ -212,13 +274,18 @@ def test_with_temp_vault(temp_vault):
     note.write_text("# Test")
     assert note.exists()
 
-def test_with_database(populated_database):
-    """Test using populated database."""
-    conn = sqlite3.connect(populated_database)
+def test_with_database(vault_database):
+    """Test using vault database."""
+    conn = sqlite3.connect(vault_database)
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM tags")
     count = cursor.fetchone()[0]
     assert count > 0
+
+def test_with_populated_data(populated_database):
+    """Test using database with sample data."""
+    # Database already has tags and files
+    pass
 ```
 
 ## Best Practices
@@ -233,17 +300,32 @@ def test_with_database(populated_database):
 
 ## Continuous Integration
 
-To integrate with CI/CD:
+### GitHub Actions Example
 
 ```yaml
-# Example GitHub Actions workflow
-- name: Run tests
-  run: |
-    pip install -e ".[test]"
-    pytest --cov=Library --cov-report=xml
+name: Tests
 
-- name: Upload coverage
-  uses: codecov/codecov-action@v3
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+
+      - name: Run tests
+        run: |
+          pytest --cov=vault_manager --cov-report=xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
 ```
 
 ## Debugging Tests
@@ -258,11 +340,17 @@ pytest -x
 # Show print statements
 pytest -s
 
+# Show locals on failure
+pytest -vv --showlocals
+
 # Run last failed tests only
 pytest --lf
 
 # Run failed tests first, then others
 pytest --ff
+
+# Run tests matching a pattern
+pytest -k pattern
 ```
 
 ## Writing New Tests
@@ -283,3 +371,28 @@ When adding new functionality:
 - **Core utilities**: Aim for >90%
 - **Command implementations**: Aim for >75%
 - **Edge cases**: All known error conditions should be tested
+
+## Configuration
+
+- Pytest reads settings from `pyproject.toml` (`[tool.pytest.ini_options]`).
+- No `pytest.ini` is required. Adjust markers, addopts, or testpaths there.
+- Coverage configuration is in `pyproject.toml` under `[tool.coverage.*]`.
+
+## Resources
+
+- [pytest documentation](https://docs.pytest.org/)
+- [pytest-bdd documentation](https://pytest-bdd.readthedocs.io/)
+- [Gherkin syntax reference](https://cucumber.io/docs/gherkin/reference/)
+
+## Getting Help
+
+```bash
+# pytest help
+pytest --help
+
+# Available fixtures
+pytest --fixtures
+
+# Available markers
+pytest --markers
+```

@@ -13,14 +13,17 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path
-from vault_manager.core.frontmatter import is_sensitive_note
+from ..common import get_vault_root
+from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 # Try to import anthropic for AI features
 try:
     from anthropic import Anthropic
     HAS_ANTHROPIC = True
 except ImportError:
+    Anthropic = None
     HAS_ANTHROPIC = False
 
 
@@ -95,17 +98,19 @@ class SummarizeCommand(Command):
         print(f"Privacy: Skipping notes with 'sensitive: true' in frontmatter")
 
         # Process directory
-        stats = self._process_directory(target_dir, vault_root, api_key, args.dry_run, args.overwrite)
+        with DryRunContext(args.dry_run) as ctx:
+            self._process_directory(target_dir, vault_root, api_key, ctx, args.overwrite)
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
+            # Print summary
+            self._print_custom_summary(ctx)
+            print_dry_run_summary(ctx)
 
-        if not args.dry_run and stats['processed'] > 0:
-            print(f"\nDone! Processed {stats['processed']} file{'s' if stats['processed'] != 1 else ''}.")
-        elif args.dry_run and stats['processed'] > 0:
-            print(f"\nDry run complete. {stats['processed']} file{'s' if stats['processed'] != 1 else ''} would be processed.")
-        else:
-            print("\nNo files processed.")
+            if not args.dry_run and ctx.stats.files_processed > 0:
+                print(f"\nDone! Processed {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''}.")
+            elif args.dry_run and ctx.stats.files_processed > 0:
+                print(f"\nDry run complete. {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''} would be processed.")
+            else:
+                print("\nNo files processed.")
 
     def _extract_frontmatter_with_summary(self, content: str) -> Tuple[Optional[str], str, Optional[str]]:
         """
@@ -253,123 +258,90 @@ Note content:
             return False
 
     def _process_directory(self, directory: Path, vault_root: Path, api_key: str,
-                          dry_run: bool = False, overwrite: bool = False, max_depth: int = 5) -> Dict:
+                          ctx: DryRunContext, overwrite: bool = False, max_depth: int = 5) -> None:
         """
         Recursively process all markdown files in a directory.
-
-        Returns:
-            Dictionary with statistics
         """
-        stats = {
-            'total_files': 0,
-            'skipped_has_summary': 0,
-            'skipped_no_frontmatter': 0,
-            'skipped_sensitive': 0,
-            'skipped_too_deep': 0,
-            'processed': 0,
-            'failed': 0,
-            'failed_files': []
-        }
+        print(f"\n{'DRY RUN - ' if ctx.dry_run else ''}Processing markdown files (max depth: {max_depth})...")
 
-        print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files (max depth: {max_depth})...")
-
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
-
+        # Note: iter_markdown_files uses rglob which traverses all depths
+        # We'll need to manually check depth since there's no max_depth parameter
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores={'Excalidraw', 'Calendar'}, exclude_excalidraw=True):
             # Calculate current depth relative to target directory
             try:
-                relative_to_target = root_path.relative_to(directory)
+                relative_to_target = file_path.parent.relative_to(directory)
                 current_depth = len(relative_to_target.parts)
             except ValueError:
                 current_depth = 0
 
             # Skip if we've exceeded max depth
             if current_depth > max_depth:
-                dirs[:] = []
                 continue
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            ctx.stats.increment('total_files')
+            relative_path = file_path.relative_to(vault_root)
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
+            try:
+                # Read file
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # Check if note is marked as sensitive
+                if FrontmatterManager.is_sensitive_note(content):
+                    print(f"  Skipping (sensitive): {relative_path}")
+                    ctx.stats.increment('skipped_sensitive')
                     continue
 
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
+                # Extract frontmatter and check for existing summary
+                frontmatter, body, existing_summary = self._extract_frontmatter_with_summary(content)
+
+                if frontmatter is None:
+                    print(f"  Skipping (no frontmatter): {relative_path}")
+                    ctx.stats.increment('skipped_no_frontmatter')
                     continue
 
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = file_path.relative_to(vault_root)
+                if existing_summary and not overwrite:
+                    print(f"  Skipping (has summary): {relative_path}")
+                    ctx.stats.increment('skipped_has_summary')
+                    continue
 
-                try:
-                    # Read file
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
+                # Generate summary
+                print(f"  {'Would generate' if ctx.dry_run else 'Generating'} summary: {relative_path}")
+                summary = self._generate_summary(content, api_key)
+                print(f"    → {summary[:100]}{'...' if len(summary) > 100 else ''}")
 
-                    # Check if note is marked as sensitive
-                    if is_sensitive_note(content):
-                        print(f"  Skipping (sensitive): {relative_path}")
-                        stats['skipped_sensitive'] += 1
-                        continue
+                # Update file
+                if self._update_file_with_summary(file_path, summary, ctx.dry_run):
+                    ctx.stats.increment('files_processed')
+                    ctx.record_change(
+                        file_path,
+                        "Added AI-generated summary",
+                        summary=summary[:100] + ('...' if len(summary) > 100 else '')
+                    )
+                else:
+                    ctx.stats.increment('files_failed')
+                    ctx.stats.custom_stats.setdefault('failed_files', []).append(str(relative_path))
 
-                    # Extract frontmatter and check for existing summary
-                    frontmatter, body, existing_summary = self._extract_frontmatter_with_summary(content)
+            except Exception as e:
+                print(f"  Error processing {relative_path}: {e}")
+                ctx.stats.increment('files_failed')
+                ctx.stats.custom_stats.setdefault('failed_files', []).append(str(relative_path))
 
-                    if frontmatter is None:
-                        print(f"  Skipping (no frontmatter): {relative_path}")
-                        stats['skipped_no_frontmatter'] += 1
-                        continue
-
-                    if existing_summary and not overwrite:
-                        print(f"  Skipping (has summary): {relative_path}")
-                        stats['skipped_has_summary'] += 1
-                        continue
-
-                    # Generate summary
-                    print(f"  {'Would generate' if dry_run else 'Generating'} summary: {relative_path}")
-                    summary = self._generate_summary(content, api_key)
-                    print(f"    → {summary[:100]}{'...' if len(summary) > 100 else ''}")
-
-                    # Update file
-                    if self._update_file_with_summary(file_path, summary, dry_run):
-                        stats['processed'] += 1
-                    else:
-                        stats['failed'] += 1
-                        stats['failed_files'].append(str(relative_path))
-
-                except Exception as e:
-                    print(f"  Error processing {relative_path}: {e}")
-                    stats['failed'] += 1
-                    stats['failed_files'].append(str(relative_path))
-
-        return stats
-
-    def _print_summary(self, stats: Dict, dry_run: bool = False) -> None:
-        """Print summary of processing results."""
+    def _print_custom_summary(self, ctx: DryRunContext) -> None:
+        """Print custom summary of processing results."""
         print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
+        print("AI Summary Generation Details")
         print("=" * 60)
-        print(f"Total markdown files: {stats['total_files']}")
-        print(f"Skipped (has summary): {stats['skipped_has_summary']}")
-        print(f"Skipped (no frontmatter): {stats['skipped_no_frontmatter']}")
-        print(f"Skipped (sensitive): {stats['skipped_sensitive']}")
-        if stats.get('skipped_too_deep', 0) > 0:
-            print(f"Skipped (too deep): {stats['skipped_too_deep']}")
-        print(f"Successfully processed: {stats['processed']}")
-        print(f"Failed: {stats['failed']}")
+        print(f"Skipped (has summary): {ctx.stats.custom_stats.get('skipped_has_summary', 0)}")
+        print(f"Skipped (no frontmatter): {ctx.stats.custom_stats.get('skipped_no_frontmatter', 0)}")
+        print(f"Skipped (sensitive): {ctx.stats.custom_stats.get('skipped_sensitive', 0)}")
 
-        if stats['failed_files']:
-            print(f"\nFailed files ({len(stats['failed_files'])}):")
-            for file_path in stats['failed_files']:
+        skipped_too_deep = ctx.stats.custom_stats.get('skipped_too_deep', 0)
+        if skipped_too_deep > 0:
+            print(f"Skipped (too deep): {skipped_too_deep}")
+
+        failed_files = ctx.stats.custom_stats.get('failed_files', [])
+        if failed_files:
+            print(f"\nFailed files ({len(failed_files)}):")
+            for file_path in failed_files:
                 print(f"  - {file_path}")
-
-        if dry_run and stats['processed'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)

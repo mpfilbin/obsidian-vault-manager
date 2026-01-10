@@ -6,16 +6,17 @@ This command removes one or more specified tags from all files in the vault,
 updates the files' frontmatter, and rebuilds the vault index database.
 """
 
-import re
-import sys
-import yaml
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from vault_manager.core.command import Command
-from vault_manager.core.vault import get_vault_root, get_markdown_files
+from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
+from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.file_ops import atomic_update
+from vault_manager.core.database import auto_rebuild_after
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class PurgeCommand(Command):
@@ -40,127 +41,123 @@ class PurgeCommand(Command):
             help='Skip automatic database rebuild (rebuild manually with "vault index build")'
         )
 
+    @auto_rebuild_after("tag purge")
     def execute(self, args: Namespace) -> None:
         """Execute the purge command to remove specified tags."""
         vault_root = get_vault_root()
         tags_to_purge = set(args.tags)  # Convert to set for faster lookup
-        dry_run = args.dry_run
 
         print(f"\n{'='*60}")
         print(f"Tag Purge Tool")
         print(f"{'='*60}")
         print(f"Vault: {vault_root}")
         print(f"Tags to purge: {', '.join(sorted(tags_to_purge))}")
-        print(f"Mode: {'DRY RUN (preview only)' if dry_run else 'LIVE MODE'}")
+        print(f"Mode: {'DRY RUN (preview only)' if args.dry_run else 'LIVE MODE'}")
         print(f"{'='*60}\n")
 
         # Process all markdown files in the vault
         print("Scanning vault for tags to purge...\n")
-        stats = self._process_vault(vault_root, tags_to_purge, dry_run)
 
-        # Display summary
-        self._print_summary(stats, tags_to_purge, dry_run)
+        with DryRunContext(args.dry_run) as ctx:
+            tag_counts = self._process_vault(vault_root, tags_to_purge, ctx)
 
-        # If no tags were found, exit
-        if stats['total_tags_removed'] == 0:
-            print("\nNo matching tags found in vault.")
-            return
-
-        # Show confirmation prompt (only in live mode)
-        if not dry_run:
-            if not self._confirm_purge(stats):
-                print("\nOperation cancelled by user.")
+            # If no tags were found, exit early
+            if ctx.stats.custom_stats.get('total_tags_removed', 0) == 0:
+                print("\nNo matching tags found in vault.")
                 return
 
-            # Actually purge the tags
-            print("\nPurging tags from files...")
-            stats = self._process_vault(vault_root, tags_to_purge, dry_run=False, confirm_phase=False)
-            self._print_summary(stats, tags_to_purge, dry_run=False)
+            # Show confirmation prompt (only in live mode)
+            if not args.dry_run:
+                if not self._confirm_purge(ctx, tag_counts):
+                    print("\nOperation cancelled by user.")
+                    return
 
-            # Rebuild the database
-            if stats['files_modified'] > 0:
-                if args.no_rebuild:
-                    print(f"\n{'='*60}")
-                    print("⚠ Database Rebuild Skipped")
-                    print(f"{'='*60}")
-                    print("\nThe vault.db database was NOT updated.")
-                    print("To update the database, run: vault index build")
-                    print(f"{'='*60}")
-                else:
-                    self._rebuild_database()
-        else:
-            print("\nTo apply these changes, run the command without --dry-run flag.")
+                # Actually purge the tags
+                print("\nPurging tags from files...")
+                self._process_vault(vault_root, tags_to_purge, ctx, confirm_phase=False)
+
+            # Display summary
+            self._print_custom_summary(ctx, tag_counts)
+            print_dry_run_summary(ctx)
 
     def _process_vault(
         self,
         vault_root: Path,
         tags_to_purge: set,
-        dry_run: bool,
+        ctx: DryRunContext,
         confirm_phase: bool = True
-    ) -> Dict:
+    ) -> Counter:
         """
         Process all markdown files in the vault.
 
         Args:
             vault_root: Root directory of the vault
             tags_to_purge: Set of tags to remove
-            dry_run: If True, don't modify files
+            ctx: DryRunContext for tracking operations
             confirm_phase: If True, this is the preview phase before confirmation
 
         Returns:
-            Dictionary with statistics
+            Counter with tag removal counts
         """
-        stats = {
-            'total_files': 0,
-            'files_with_frontmatter': 0,
-            'files_modified': 0,
-            'files_failed': 0,
-            'total_tags_removed': 0,
-            'purged_tag_counts': Counter(),
-            'failed_files': []
-        }
+        tag_counts = Counter()
+        failed_files = []
 
         # Get all markdown files (excluding ignored directories)
         additional_ignores = {'Excalidraw'}
-        markdown_files = get_markdown_files(
+
+        # Count files first for progress tracking
+        ctx.stats.total_files = count_markdown_files(
             vault_root,
             vault_root,
             additional_ignores=additional_ignores,
             exclude_excalidraw=True
         )
 
-        stats['total_files'] = len(markdown_files)
-
-        # Process each file
-        for file_path in markdown_files:
+        # Process each file using iterator (memory-efficient)
+        for file_path in iter_markdown_files(
+            vault_root,
+            vault_root,
+            additional_ignores=additional_ignores,
+            exclude_excalidraw=True
+        ):
             try:
                 success, removed_tags = self._purge_file(
                     file_path,
                     vault_root,
                     tags_to_purge,
-                    dry_run or confirm_phase
+                    ctx.dry_run or confirm_phase
                 )
 
                 if removed_tags:
-                    stats['files_modified'] += 1
-                    stats['total_tags_removed'] += len(removed_tags)
-                    stats['purged_tag_counts'].update(removed_tags)
+                    ctx.stats.increment('files_modified')
+                    ctx.stats.increment('total_tags_removed', len(removed_tags))
+                    tag_counts.update(removed_tags)
+
+                    ctx.record_change(
+                        file_path,
+                        f"Removed {len(removed_tags)} tag(s)",
+                        tags=removed_tags
+                    )
 
                     # Show progress (only during actual purge, not confirmation)
                     if not confirm_phase:
                         relative_path = file_path.relative_to(vault_root)
-                        mode_prefix = "[DRY RUN] Would remove from" if dry_run else "Removed from"
+                        mode_prefix = "[DRY RUN] Would remove from" if ctx.dry_run else "Removed from"
                         tags_str = ", ".join(removed_tags)
                         print(f"{mode_prefix} {relative_path}: {tags_str}")
 
                 if not success:
-                    stats['files_failed'] += 1
+                    ctx.stats.increment('files_failed')
 
             except Exception as e:
-                stats['files_failed'] += 1
-                stats['failed_files'].append((file_path, str(e)))
+                ctx.stats.increment('files_failed')
+                failed_files.append((file_path, str(e)))
 
-        return stats
+        # Store failed files in context for reporting
+        if failed_files:
+            ctx.stats.custom_stats['failed_files'] = failed_files
+
+        return tag_counts
 
     def _purge_file(
         self,
@@ -181,132 +178,93 @@ class PurgeCommand(Command):
         Returns:
             Tuple of (success: bool, removed_tags: List[str])
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        removed_tags = []
 
-            # Extract frontmatter
-            frontmatter, body, has_frontmatter = self._extract_frontmatter(content)
+        def updater(content: str) -> Optional[str]:
+            nonlocal removed_tags
 
-            if not has_frontmatter:
-                return True, []
+            # Extract frontmatter using FrontmatterManager
+            frontmatter_dict, body = FrontmatterManager.extract(content)
 
-            # Purge tags from frontmatter
-            updated_frontmatter, removed_tags = self._purge_tags_from_frontmatter(
-                frontmatter,
+            if frontmatter_dict is None:
+                return None
+
+            # Purge tags from frontmatter dict
+            updated_dict, tags_removed = self._purge_tags_from_frontmatter(
+                frontmatter_dict,
                 tags_to_purge
             )
 
             # If no tags were removed, skip this file
-            if not removed_tags:
-                return True, []
+            if not tags_removed:
+                return None
 
-            # Reconstruct the file content
-            updated_content = f"---\n{updated_frontmatter}---\n{body}"
+            removed_tags = tags_removed
 
-            # Write back to file (unless dry-run)
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
+            # Serialize back to markdown using FrontmatterManager
+            return FrontmatterManager.serialize(updated_dict, body)
 
-            return True, removed_tags
-
-        except Exception as e:
-            return False, []
-
-    def _extract_frontmatter(self, content: str) -> Tuple[str, str, bool]:
-        """
-        Extract YAML frontmatter from markdown content.
-
-        Args:
-            content: Full file content
-
-        Returns:
-            Tuple of (frontmatter_text, body, has_frontmatter)
-        """
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if match:
-            frontmatter = match.group(1)
-            body = content[match.end():]
-            return frontmatter, body, True
-        else:
-            return '', content, False
+        success = atomic_update(file_path, updater, dry_run=dry_run, silent=True)
+        return success, removed_tags
 
     def _purge_tags_from_frontmatter(
         self,
-        frontmatter: str,
+        frontmatter_dict: Dict,
         tags_to_purge: set
-    ) -> Tuple[str, List[str]]:
+    ) -> Tuple[Dict, List[str]]:
         """
-        Remove specified tags from YAML frontmatter.
+        Remove specified tags from frontmatter dictionary.
 
         Args:
-            frontmatter: YAML frontmatter text
+            frontmatter_dict: Parsed frontmatter dictionary
             tags_to_purge: Set of tags to remove
 
         Returns:
-            Tuple of (updated_frontmatter, removed_tags)
+            Tuple of (updated_dict, removed_tags)
         """
-        try:
-            # Parse YAML
-            frontmatter_dict = yaml.safe_load(frontmatter) or {}
+        # Get current tags
+        if 'tags' not in frontmatter_dict:
+            return frontmatter_dict, []
 
-            # Get current tags
-            if 'tags' not in frontmatter_dict:
-                return frontmatter, []
+        current_tags = frontmatter_dict['tags']
 
-            current_tags = frontmatter_dict['tags']
+        # Handle different tag formats
+        if current_tags is None:
+            return frontmatter_dict, []
 
-            # Handle different tag formats
-            if current_tags is None:
-                return frontmatter, []
+        if isinstance(current_tags, str):
+            current_tags = [current_tags]
+        elif not isinstance(current_tags, list):
+            return frontmatter_dict, []
 
-            if isinstance(current_tags, str):
-                current_tags = [current_tags]
-            elif not isinstance(current_tags, list):
-                return frontmatter, []
+        # Filter out tags to purge (case-sensitive exact match)
+        removed_tags = []
+        updated_tags = []
 
-            # Filter out tags to purge (case-sensitive exact match)
-            removed_tags = []
-            updated_tags = []
+        for tag in current_tags:
+            if tag in tags_to_purge:
+                removed_tags.append(tag)
+            else:
+                updated_tags.append(tag)
 
-            for tag in current_tags:
-                if tag in tags_to_purge:
-                    removed_tags.append(tag)
-                else:
-                    updated_tags.append(tag)
+        # If no tags were removed, return original
+        if not removed_tags:
+            return frontmatter_dict, []
 
-            # If no tags were removed, return original
-            if not removed_tags:
-                return frontmatter, []
+        # Create updated dictionary with remaining tags
+        # Keep empty list if all tags removed (per user requirement)
+        updated_dict = frontmatter_dict.copy()
+        updated_dict['tags'] = updated_tags
 
-            # Update frontmatter with remaining tags
-            # Keep empty list if all tags removed (per user requirement)
-            frontmatter_dict['tags'] = updated_tags
+        return updated_dict, removed_tags
 
-            # Serialize back to YAML
-            updated_frontmatter = yaml.dump(
-                frontmatter_dict,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False
-            )
-
-            return updated_frontmatter, removed_tags
-
-        except yaml.YAMLError:
-            # If YAML parsing fails, return unchanged
-            return frontmatter, []
-
-    def _confirm_purge(self, stats: Dict) -> bool:
+    def _confirm_purge(self, ctx: DryRunContext, tag_counts: Counter) -> bool:
         """
         Show confirmation prompt before purging tags.
 
         Args:
-            stats: Statistics dictionary from processing
+            ctx: DryRunContext with statistics
+            tag_counts: Counter with tag removal counts
 
         Returns:
             True if user confirms, False otherwise
@@ -316,42 +274,34 @@ class PurgeCommand(Command):
         print(f"{'='*60}")
         print(f"\nFound tags to purge:")
 
-        for tag, count in stats['purged_tag_counts'].most_common():
+        for tag, count in tag_counts.most_common():
             print(f"  - {tag}: {count} occurrence{'s' if count != 1 else ''}")
 
-        print(f"\nTotal: {stats['total_tags_removed']} tag{'s' if stats['total_tags_removed'] != 1 else ''} "
-              f"will be removed from {stats['files_modified']} file{'s' if stats['files_modified'] != 1 else ''}")
+        total_tags = ctx.stats.custom_stats.get('total_tags_removed', 0)
+        print(f"\nTotal: {total_tags} tag{'s' if total_tags != 1 else ''} "
+              f"will be removed from {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''}")
 
         response = input("\nProceed with purge? (y/n): ").strip().lower()
         return response == 'y'
 
-    def _print_summary(self, stats: Dict, tags_to_purge: set, dry_run: bool) -> None:
-        """Print summary statistics."""
+    def _print_custom_summary(self, ctx: DryRunContext, tag_counts: Counter) -> None:
+        """Print custom summary statistics for tag purge."""
         print(f"\n{'='*60}")
-        print("Tag Purge Summary")
+        print("Tag Purge Details")
         print(f"{'='*60}")
-        print(f"\nStatistics:")
-        print(f"  Total files scanned: {stats['total_files']}")
-        print(f"  Files modified: {stats['files_modified']}")
-        print(f"  Total tags removed: {stats['total_tags_removed']}")
 
-        if stats['purged_tag_counts']:
+        if tag_counts:
             print(f"\nTags purged:")
-            for tag, count in stats['purged_tag_counts'].most_common():
+            for tag, count in tag_counts.most_common():
                 print(f"  - {tag}: {count} occurrence{'s' if count != 1 else ''}")
 
-        if stats['files_failed'] > 0:
-            print(f"\nFailed files: {stats['files_failed']}")
-            if stats['failed_files']:
-                print("\nFiles that failed to process:")
-                for file_path, error in stats['failed_files'][:10]:
-                    print(f"  - {file_path}: {error}")
-                if len(stats['failed_files']) > 10:
-                    print(f"  ... and {len(stats['failed_files']) - 10} more")
+        failed_files = ctx.stats.custom_stats.get('failed_files', [])
+        if failed_files:
+            print(f"\nFiles that failed to process:")
+            for file_path, error in failed_files[:10]:
+                print(f"  - {file_path}: {error}")
+            if len(failed_files) > 10:
+                print(f"  ... and {len(failed_files) - 10} more")
 
         print(f"\n{'='*60}")
 
-    def _rebuild_database(self) -> None:
-        """Rebuild the vault index database after purging tags."""
-        from vault_manager.core.database import rebuild_vault_database
-        rebuild_vault_database()

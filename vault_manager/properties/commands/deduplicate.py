@@ -5,17 +5,18 @@ This module implements the deduplicate command which removes duplicate
 frontmatter keys, keeping only the last occurrence of each property.
 """
 
-import os
-import re
-import sys
 import yaml
 from argparse import ArgumentParser, Namespace
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, extract_frontmatter
+from ..common import get_vault_root
+from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.vault import iter_markdown_files, validate_directory
+from vault_manager.core.file_ops import atomic_update
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class DeduplicateCommand(Command):
@@ -39,21 +40,8 @@ class DeduplicateCommand(Command):
         # Get vault root
         vault_root = get_vault_root()
 
-        # Resolve directory path
-        if args.directory == '.':
-            target_dir = vault_root
-        else:
-            target_dir = vault_root / args.directory
-
         # Validate directory
-        if not target_dir.exists():
-            print(f"Error: Directory not found: {args.directory}")
-            print(f"Looking for: {target_dir}")
-            sys.exit(1)
-
-        if not target_dir.is_dir():
-            print(f"Error: Not a directory: {args.directory}")
-            sys.exit(1)
+        target_dir = validate_directory(args.directory, vault_root)
 
         # Display header
         print("=" * 60)
@@ -66,16 +54,19 @@ class DeduplicateCommand(Command):
         print()
         print("Strategy: Keep last occurrence of duplicate properties")
 
-        # Process directory
-        stats = self._process_directory(target_dir, vault_root, args.dry_run)
+        # Process directory with DryRunContext
+        with DryRunContext(args.dry_run) as ctx:
+            self._process_directory(target_dir, vault_root, ctx)
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
+            # Print summary
+            print_dry_run_summary(ctx, additional_info="Strategy: Keep last occurrence of duplicate properties")
 
-        if not args.dry_run and stats['files_modified'] > 0:
-            print(f"\nDone! Modified {stats['files_modified']} file{'s' if stats['files_modified'] != 1 else ''}.")
-        elif args.dry_run and stats['files_modified'] > 0:
-            print(f"\nDry run complete. {stats['files_modified']} file{'s' if stats['files_modified'] != 1 else ''} would be modified.")
+        # Final message
+        if ctx.stats.files_modified > 0:
+            if not args.dry_run:
+                print(f"\nDone! Modified {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''}.")
+            else:
+                print(f"\nDry run complete. {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''} would be modified.")
         else:
             print("\nNo duplicate properties found.")
 
@@ -122,29 +113,22 @@ class DeduplicateCommand(Command):
 
         return deduplicated, duplicates
 
-    def _deduplicate_frontmatter(self, frontmatter: str) -> Tuple[str, List[str]]:
+    def _deduplicate_frontmatter(self, frontmatter: str) -> Tuple[Optional[Dict], List[str]]:
         """
         Remove duplicate properties from frontmatter.
 
         Returns:
-            Tuple of (deduplicated_frontmatter, list_of_duplicates_removed)
+            Tuple of (deduplicated_dict, list_of_duplicates_removed)
+            Returns (None, []) if no duplicates found
         """
         deduplicated_dict, duplicates = self._parse_frontmatter_raw(frontmatter)
 
-        # If no duplicates, return original
+        # If no duplicates, return None to indicate no changes
         if not duplicates:
-            return frontmatter, []
+            return None, []
 
-        # Convert back to YAML, keeping the last occurrence of each key
-        deduplicated_yaml = yaml.dump(
-            dict(deduplicated_dict),
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False
-        )
-        deduplicated_yaml = deduplicated_yaml.rstrip('\n')
-
-        return deduplicated_yaml, duplicates
+        # Return the deduplicated dict (serialization will be done by FrontmatterManager)
+        return dict(deduplicated_dict), duplicates
 
     def _deduplicate_file(self, file_path: Path, vault_root: Path, dry_run: bool = False) -> Tuple[bool, List[str]]:
         """
@@ -153,119 +137,64 @@ class DeduplicateCommand(Command):
         Returns:
             Tuple of (success, list_of_duplicates_removed)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        duplicates = []
 
-            # Extract frontmatter
-            frontmatter, body = extract_frontmatter(content)
+        def updater(content: str) -> Optional[str]:
+            nonlocal duplicates
 
-            if frontmatter is None:
-                return True, []
+            # Extract frontmatter (need raw text for duplicate detection)
+            from ..common import extract_frontmatter
+            frontmatter_text, body = extract_frontmatter(content)
 
-            # Deduplicate frontmatter
-            deduplicated_frontmatter, duplicates = self._deduplicate_frontmatter(frontmatter)
+            if frontmatter_text is None:
+                return None
 
-            # If no duplicates, skip
-            if not duplicates:
-                return True, []
+            # Deduplicate frontmatter (returns dict or None)
+            deduplicated_dict, dups = self._deduplicate_frontmatter(frontmatter_text)
 
-            # Reconstruct file
-            updated_content = f"---\n{deduplicated_frontmatter}\n---\n{body}"
+            # If no duplicates found, skip
+            if not dups:
+                return None
 
-            # Write back if not dry run
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
+            duplicates = dups
 
-            return True, duplicates
+            # Serialize back to markdown using FrontmatterManager
+            return FrontmatterManager.serialize(deduplicated_dict, body)
 
-        except Exception as e:
-            print(f"  Error processing {file_path}: {e}")
-            return False, []
+        success = atomic_update(file_path, updater, dry_run=dry_run)
+        return success, duplicates
 
-    def _process_directory(self, directory: Path, vault_root: Path, dry_run: bool = False) -> Dict:
+    def _process_directory(self, directory: Path, vault_root: Path, ctx: DryRunContext) -> None:
         """
         Recursively process all markdown files in a directory.
 
-        Returns:
-            Dictionary with statistics
+        Args:
+            directory: Directory to process
+            vault_root: Root directory of the vault
+            ctx: DryRunContext for tracking operations
         """
-        stats = {
-            'total_files': 0,
-            'files_with_frontmatter': 0,
-            'files_modified': 0,
-            'files_failed': 0,
-            'total_duplicates_removed': 0,
-            'duplicate_property_counts': Counter(),
-            'failed_files': []
-        }
+        print(f"\n{'DRY RUN - ' if ctx.dry_run else ''}Processing markdown files...")
 
-        print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw', 'Calendar'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            ctx.stats.increment('total_files')
+            relative_path = file_path.relative_to(vault_root)
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+            # Deduplicate the file
+            success, duplicates = self._deduplicate_file(file_path, vault_root, ctx.dry_run)
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            if not success:
+                ctx.stats.increment('files_failed')
+                print(f"  ✗ Failed: {relative_path}")
+            elif duplicates:
+                ctx.stats.increment('files_modified')
+                ctx.stats.increment('total_duplicates_removed', len(duplicates))
+                for key in duplicates:
+                    ctx.stats.increment(f'duplicate_property_{key}')
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
-
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
-                    continue
-
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = file_path.relative_to(vault_root)
-
-                # Deduplicate the file
-                success, duplicates = self._deduplicate_file(file_path, vault_root, dry_run)
-
-                if not success:
-                    stats['files_failed'] += 1
-                    stats['failed_files'].append(str(relative_path))
-                elif duplicates:
-                    stats['files_modified'] += 1
-                    stats['total_duplicates_removed'] += len(duplicates)
-                    for key in duplicates:
-                        stats['duplicate_property_counts'][key] += 1
-
-                    mode = "Would fix" if dry_run else "Fixed"
-                    print(f"  {mode}: {relative_path}")
-                    for key in duplicates:
-                        print(f"    - Removed duplicate '{key}' property")
-
-        return stats
-
-    def _print_summary(self, stats: Dict, dry_run: bool = False) -> None:
-        """Print summary of deduplication results."""
-        print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
-        print("=" * 60)
-        print(f"Total markdown files scanned: {stats['total_files']}")
-        print(f"Files with duplicates: {stats['files_modified']}")
-        print(f"Files failed: {stats['files_failed']}")
-        print(f"Total duplicate properties removed: {stats['total_duplicates_removed']}")
-
-        if stats['duplicate_property_counts']:
-            print(f"\nMost common duplicate properties:")
-            for prop, count in stats['duplicate_property_counts'].most_common(10):
-                print(f"  - '{prop}': {count} file{'s' if count != 1 else ''}")
-
-        if stats['failed_files']:
-            print(f"\nFailed files ({len(stats['failed_files'])}):")
-            for file_path in stats['failed_files']:
-                print(f"  - {file_path}")
-
-        if dry_run and stats['files_modified'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)
+                ctx.record_change(file_path, f"Removed {len(duplicates)} duplicate properties", properties=duplicates)
+                mode = "Would fix" if ctx.dry_run else "Fixed"
+                print(f"  {mode}: {relative_path}")
+                for key in duplicates:
+                    print(f"    - Removed duplicate '{key}' property")

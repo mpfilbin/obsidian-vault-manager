@@ -5,17 +5,17 @@ This module implements the clean invalid subcommand which removes tags that don'
 conform to Obsidian's tag validation rules.
 """
 
-import os
-import re
 import sys
-import yaml
 from argparse import ArgumentParser, Namespace
-from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, extract_tags_from_frontmatter, is_valid_obsidian_tag
+from ..common import get_vault_root
+from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.file_ops import atomic_update
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class CleanInvalidCommand(Command):
@@ -69,60 +69,43 @@ class CleanInvalidCommand(Command):
         print("  - Must contain at least one non-numerical character (letter or underscore)")
         print("  - Examples: #1984 (invalid), #y1984 (valid), #_test (valid)")
 
-        # Process directory
-        stats = self._process_directory(target_dir, vault_root, args.dry_run)
+        # Process directory with DryRunContext
+        with DryRunContext(args.dry_run) as ctx:
+            self._process_directory(target_dir, vault_root, ctx)
+            print_dry_run_summary(ctx)
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
-
-        if not args.dry_run and stats['files_modified'] > 0:
-            print(f"\nDone! Modified {stats['files_modified']} file{'s' if stats['files_modified'] != 1 else ''}.")
-        elif args.dry_run and stats['files_modified'] > 0:
-            print(f"\nDry run complete. {stats['files_modified']} file{'s' if stats['files_modified'] != 1 else ''} would be modified.")
+        # Final message
+        if ctx.stats.files_modified > 0:
+            if not args.dry_run:
+                print(f"\nDone! Modified {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''}.")
+            else:
+                print(f"\nDry run complete. {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''} would be modified.")
         else:
             print("\nNo invalid tags found.")
 
-    def _extract_frontmatter(self, content: str) -> Tuple[str, str, bool]:
+    def _clean_tags_from_frontmatter(self, frontmatter_dict: Optional[Dict]) -> Tuple[Optional[Dict], List[str], List[str]]:
         """
-        Extract YAML frontmatter from markdown content.
+        Remove invalid tags from frontmatter dictionary.
+
+        Args:
+            frontmatter_dict: Parsed frontmatter dictionary
 
         Returns:
-            Tuple of (frontmatter_text, body, has_frontmatter)
+            Tuple of (updated_dict, valid_tags, removed_tags)
         """
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if not match:
-            return '', content, False
-
-        frontmatter = match.group(1)
-        body = content[match.end():]
-
-        return frontmatter, body, True
-
-    def _clean_tags_from_frontmatter(self, frontmatter: str) -> Tuple[str, List[str], List[str]]:
-        """
-        Remove invalid tags from YAML frontmatter.
-
-        Returns:
-            Tuple of (updated_frontmatter, valid_tags, removed_tags)
-        """
-        # Parse frontmatter as YAML
-        try:
-            frontmatter_dict = yaml.safe_load(frontmatter) or {}
-        except yaml.YAMLError:
-            return frontmatter, [], []
+        if frontmatter_dict is None:
+            return None, [], []
 
         # Extract current tags
         tags = frontmatter_dict.get('tags', [])
         if not tags:
-            return frontmatter, [], []
+            return frontmatter_dict, [], []
 
         # Ensure tags is a list
         if isinstance(tags, str):
             tags = [tags]
         elif not isinstance(tags, list):
-            return frontmatter, [], []
+            return frontmatter_dict, [], []
 
         # Validate and filter tags
         valid_tags = []
@@ -130,28 +113,27 @@ class CleanInvalidCommand(Command):
 
         for tag in tags:
             tag_str = str(tag).strip()
-            if is_valid_obsidian_tag(tag_str):
+            if FrontmatterManager.is_valid_obsidian_tag(tag_str):
                 valid_tags.append(tag_str)
             else:
                 removed_tags.append(tag_str)
 
-        # If no tags were removed, return original
+        # If no tags were removed, return None to indicate no changes
         if not removed_tags:
-            return frontmatter, valid_tags, []
+            return None, valid_tags, []
 
-        # Update frontmatter with valid tags only
+        # Create updated dictionary
+        updated_dict = frontmatter_dict.copy()
+
+        # Update with valid tags only
         if valid_tags:
-            frontmatter_dict['tags'] = valid_tags
+            updated_dict['tags'] = valid_tags
         else:
             # Remove tags field entirely if no valid tags remain
-            if 'tags' in frontmatter_dict:
-                del frontmatter_dict['tags']
+            if 'tags' in updated_dict:
+                del updated_dict['tags']
 
-        # Convert back to YAML
-        updated_yaml = yaml.dump(frontmatter_dict, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        updated_yaml = updated_yaml.rstrip('\n')
-
-        return updated_yaml, valid_tags, removed_tags
+        return updated_dict, valid_tags, removed_tags
 
     def _clean_file(self, file_path: Path, vault_root: Path, dry_run: bool = False) -> Tuple[bool, List[str]]:
         """
@@ -160,119 +142,64 @@ class CleanInvalidCommand(Command):
         Returns:
             Tuple of (success, list_of_removed_tags)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        removed_tags = []
 
-            # Extract frontmatter
-            frontmatter, body, has_frontmatter = self._extract_frontmatter(content)
+        def updater(content: str) -> Optional[str]:
+            nonlocal removed_tags
 
-            if not has_frontmatter:
-                return True, []
+            # Extract frontmatter using FrontmatterManager
+            frontmatter_dict, body = FrontmatterManager.extract(content)
+
+            if frontmatter_dict is None:
+                return None
 
             # Clean tags from frontmatter
-            updated_frontmatter, valid_tags, removed_tags = self._clean_tags_from_frontmatter(frontmatter)
+            updated_dict, valid_tags, tags_removed = self._clean_tags_from_frontmatter(frontmatter_dict)
 
             # If no tags were removed, skip
-            if not removed_tags:
-                return True, []
+            if not tags_removed:
+                return None
 
-            # Reconstruct file
-            updated_content = f"---\n{updated_frontmatter}\n---\n{body}"
+            removed_tags = tags_removed
 
-            # Write back if not dry run
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
+            # Serialize back to markdown
+            return FrontmatterManager.serialize(updated_dict, body)
 
-            return True, removed_tags
+        success = atomic_update(file_path, updater, dry_run=dry_run)
+        return success, removed_tags
 
-        except Exception as e:
-            print(f"  Error processing {file_path}: {e}")
-            return False, []
-
-    def _process_directory(self, directory: Path, vault_root: Path, dry_run: bool = False) -> Dict:
+    def _process_directory(self, directory: Path, vault_root: Path, ctx: DryRunContext) -> None:
         """
         Recursively process all markdown files in a directory.
 
-        Returns:
-            Dictionary with statistics
+        Args:
+            directory: Directory to process
+            vault_root: Root directory of the vault
+            ctx: DryRunContext for tracking operations
         """
-        stats = {
-            'total_files': 0,
-            'files_with_frontmatter': 0,
-            'files_modified': 0,
-            'files_failed': 0,
-            'total_tags_removed': 0,
-            'invalid_tag_counts': Counter(),
-            'failed_files': []
-        }
+        print(f"\n{'DRY RUN - ' if ctx.dry_run else ''}Processing markdown files...")
 
-        print(f"\n{'DRY RUN - ' if dry_run else ''}Processing markdown files...")
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw', 'Calendar'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            ctx.stats.increment('total_files')
+            relative_path = file_path.relative_to(vault_root)
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+            # Clean the file
+            success, removed_tags = self._clean_file(file_path, vault_root, ctx.dry_run)
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            if not success:
+                ctx.stats.increment('files_failed')
+                print(f"  ✗ Failed: {relative_path}")
+            elif removed_tags:
+                ctx.stats.increment('files_modified')
+                ctx.stats.increment('total_tags_removed', len(removed_tags))
+                for tag in removed_tags:
+                    ctx.stats.increment(f'invalid_tag_{tag}')
 
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
+                ctx.record_change(file_path, f"Removed {len(removed_tags)} invalid tags", tags=removed_tags)
+                mode = "Would remove from" if ctx.dry_run else "Removed from"
+                print(f"  {mode}: {relative_path}")
+                for tag in removed_tags:
+                    print(f"    - '{tag}' (invalid)")
 
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
-                    continue
-
-                stats['total_files'] += 1
-                file_path = root_path / filename
-                relative_path = file_path.relative_to(vault_root)
-
-                # Clean the file
-                success, removed_tags = self._clean_file(file_path, vault_root, dry_run)
-
-                if not success:
-                    stats['files_failed'] += 1
-                    stats['failed_files'].append(str(relative_path))
-                elif removed_tags:
-                    stats['files_modified'] += 1
-                    stats['total_tags_removed'] += len(removed_tags)
-                    for tag in removed_tags:
-                        stats['invalid_tag_counts'][tag] += 1
-
-                    mode = "Would remove from" if dry_run else "Removed from"
-                    print(f"  {mode}: {relative_path}")
-                    for tag in removed_tags:
-                        print(f"    - '{tag}' (invalid)")
-
-        return stats
-
-    def _print_summary(self, stats: Dict, dry_run: bool = False) -> None:
-        """Print summary of cleaning results."""
-        print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
-        print("=" * 60)
-        print(f"Total markdown files scanned: {stats['total_files']}")
-        print(f"Files modified: {stats['files_modified']}")
-        print(f"Files failed: {stats['files_failed']}")
-        print(f"Total invalid tags removed: {stats['total_tags_removed']}")
-
-        if stats['invalid_tag_counts']:
-            print(f"\nInvalid tags removed (top 20):")
-            for tag, count in stats['invalid_tag_counts'].most_common(20):
-                print(f"  - '{tag}': {count} occurrence{'s' if count != 1 else ''}")
-
-        if stats['failed_files']:
-            print(f"\nFailed files ({len(stats['failed_files'])})::")
-            for file_path in stats['failed_files']:
-                print(f"  - {file_path}")
-
-        if dry_run and stats['files_modified'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)

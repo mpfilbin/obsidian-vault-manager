@@ -4,18 +4,21 @@ Step definitions for Missing Tags Command BDD tests.
 
 import pytest
 from pytest_bdd import scenarios, given, when, then, parsers
-from pathlib import Path
 from argparse import Namespace
+from typing import Any, Dict
 
 from vault_manager.tags.commands.missing import MissingCommand
 
 # Load scenarios from feature file
-scenarios('../features/tags_missing.feature')
 
+
+@pytest.mark.bdd
+def test_feature():
+    scenarios('../features/tags_missing.feature')
 
 # Context to store test state
 @pytest.fixture
-def context():
+def context() -> Dict[str, Any]:
     """Test context to share state between steps."""
     return {
         'vault': None,
@@ -33,7 +36,6 @@ def test_vault_with_files(temp_vault, context):
     """Create a test vault directory."""
     context['vault'] = temp_vault
 
-
 @given(parsers.parse('a note "{filename}" with no frontmatter'))
 def note_no_frontmatter(context, filename):
     """Create a note without frontmatter."""
@@ -41,7 +43,6 @@ def note_no_frontmatter(context, filename):
     note_path.parent.mkdir(parents=True, exist_ok=True)
     note_path.write_text("# Test Note\n\nContent without frontmatter.")
     context['notes'].append(filename)
-
 
 @given(parsers.parse('a note "{filename}" with frontmatter but no tags'))
 def note_frontmatter_no_tags(context, filename):
@@ -57,7 +58,6 @@ title: Test Note
 Content with frontmatter but no tags.
 """)
     context['notes'].append(filename)
-
 
 @given(parsers.parse('a note "{filename}" with tags in frontmatter'))
 def note_with_tags(context, filename):
@@ -75,7 +75,6 @@ tags:
 Content with tags.
 """)
     context['notes'].append(filename)
-
 
 @given(parsers.parse('a note "{filename}" without tags'))
 def note_without_tags_generic(context, filename):
@@ -113,7 +112,6 @@ With tags.
 """)
         context['notes'].append(filename)
 
-
 @given('an empty vault')
 def empty_vault(context, temp_vault):
     """Use an empty vault."""
@@ -126,8 +124,9 @@ def empty_vault(context, temp_vault):
 def run_missing_tags_command(context, mock_vault_root, monkeypatch):
     """Execute the missing tags command."""
     # Mock vault root to use test vault
+    # Patch in the commands.missing module where it's actually used
     monkeypatch.setattr(
-        "Library.tags.commands.missing.get_vault_root",
+        "vault_manager.tags.commands.missing.get_vault_root",
         lambda: context['vault']
     )
 

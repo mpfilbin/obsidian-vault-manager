@@ -77,19 +77,44 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+bdd_features_base_dir = "tests/features"
 markers = [
     "unit: Unit tests",
     "bdd: Behavior-driven development tests",
-    "tags: Tag management tests",
-    "images: Image management tests",
-    "properties: Properties management tests",
-    "index: Index management tests",
+    "requires_vault: Tests that require a real vault structure",
+    "requires_ai: Tests that require AI API access",
 ]
 addopts = [
-    "--strict-markers",
+    "-v",
+    "--showlocals",
+    "-ra",
     "--cov=vault_manager",
     "--cov-report=term-missing",
     "--cov-report=html",
+    "--disable-warnings",
+    "--strict-markers",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "tests/*",
+    "__pycache__/*",
+    "*/__pycache__/*",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "@abc.abstractmethod",
 ]
 
 # Black configuration

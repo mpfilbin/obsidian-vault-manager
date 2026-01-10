@@ -127,19 +127,18 @@ class ReorganizeCommand(Command):
 
     def _load_tags(self, db_path: Path, min_count: int) -> Dict[str, int]:
         """Load tags and their counts from the database."""
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT tag, COUNT(*) as count
-            FROM file_tags
-            GROUP BY tag
-            HAVING count >= ?
-            ORDER BY count DESC
-        """, (min_count,))
+            cursor.execute("""
+                SELECT tag, COUNT(*) as count
+                FROM file_tags
+                GROUP BY tag
+                HAVING count >= ?
+                ORDER BY count DESC
+            """, (min_count,))
 
-        tags_data = {tag: count for tag, count in cursor.fetchall()}
-        conn.close()
+            tags_data = {tag: count for tag, count in cursor.fetchall()}
 
         return tags_data
 

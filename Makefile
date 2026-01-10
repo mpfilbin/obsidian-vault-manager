@@ -32,15 +32,14 @@ install-dev:
 install-test:
 	cd .. && pip install -e ".[test]"
 
-# Test targets (run from Library directory)
 test:
-	pytest -v
+	pytest -v --no-cov
 
 test-unit:
-	pytest -v -m unit
+	pytest -v -m unit --no-cov
 
 test-bdd:
-	pytest -v -m bdd
+	pytest -v -m bdd --no-cov
 
 test-coverage:
 	pytest --cov=. --cov-report=html --cov-report=term-missing
@@ -50,8 +49,6 @@ test-coverage:
 test-watch:
 	pytest-watch
 
-test-quick:
-	pytest -x --ff -m "not slow"
 
 # Quality targets
 lint:

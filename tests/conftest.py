@@ -5,12 +5,9 @@ This module provides common fixtures for testing vault management commands.
 """
 
 import pytest
-import tempfile
-import shutil
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Any
-
+import textwrap
 
 @pytest.fixture
 def temp_vault(tmp_path):
@@ -37,33 +34,39 @@ def vault_with_notes(temp_vault):
 
     # Create notes with tags
     note_with_tags = temp_vault / "note_with_tags.md"
-    note_with_tags.write_text("""---
-tags:
-  - test-tag
-  - software-development
----
+    note_with_tags.write_text(textwrap.dedent("""\
+        ---
+        tags:
+          - test-tag
+          - software-development
+        ---
 
-# Note With Tags
+        # Note With Tags
 
-This note has tags.
-""")
+        This note has tags.
+        """))
     notes.append(note_with_tags)
 
     # Create note without frontmatter
     note_no_frontmatter = temp_vault / "note_no_frontmatter.md"
-    note_no_frontmatter.write_text("# Note Without Frontmatter\n\nJust content.")
+    note_no_frontmatter.write_text(textwrap.dedent("""\
+        # Note Without Frontmatter
+
+        Just content.
+        """))
     notes.append(note_no_frontmatter)
 
     # Create note with frontmatter but no tags
     note_no_tags = temp_vault / "note_no_tags.md"
-    note_no_tags.write_text("""---
-title: Note Without Tags
----
+    note_no_tags.write_text(textwrap.dedent("""\
+        ---
+        title: Note Without Tags
+        ---
 
-# Note Without Tags
+        # Note Without Tags
 
-This note has frontmatter but no tags.
-""")
+        This note has frontmatter but no tags.
+        """))
     notes.append(note_no_tags)
 
     return {
@@ -83,56 +86,58 @@ def vault_database(temp_vault):
     db_path = temp_vault / "vault.db"
 
     # Create database with schema
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
 
-    # Create tables
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS metadata (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
+        # Create tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS files (
-            path TEXT PRIMARY KEY,
-            size INTEGER,
-            extension TEXT,
-            mtime REAL
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS files (
+                file_path TEXT PRIMARY KEY,
+                size_bytes INTEGER NOT NULL,
+                content_hash TEXT,
+                last_modified TEXT NOT NULL,
+                created TEXT,
+                has_frontmatter INTEGER DEFAULT 0
+            )
+        """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tags (
-            tag TEXT PRIMARY KEY,
-            file_count INTEGER DEFAULT 0
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tags (
+                tag TEXT PRIMARY KEY
+            )
+        """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS file_tags (
-            file_path TEXT,
-            tag TEXT,
-            FOREIGN KEY (file_path) REFERENCES files(path),
-            FOREIGN KEY (tag) REFERENCES tags(tag)
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS file_tags (
+                tag TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                PRIMARY KEY (tag, file_path),
+                FOREIGN KEY (tag) REFERENCES tags(tag) ON DELETE CASCADE,
+                FOREIGN KEY (file_path) REFERENCES files(file_path) ON DELETE CASCADE
+            )
+        """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS links (
-            source_file TEXT,
-            target_file TEXT,
-            link_text TEXT,
-            link_type TEXT,
-            is_resolved INTEGER DEFAULT 1,
-            line_number INTEGER,
-            FOREIGN KEY (source_file) REFERENCES files(path)
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_file TEXT NOT NULL,
+                target_file TEXT,
+                link_type TEXT NOT NULL,
+                link_text TEXT,
+                line_number INTEGER,
+                FOREIGN KEY (source_file) REFERENCES files(file_path) ON DELETE CASCADE,
+                FOREIGN KEY (target_file) REFERENCES files(file_path) ON DELETE SET NULL
+            )
+        """)
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
     return db_path
 
@@ -145,38 +150,37 @@ def populated_database(vault_database):
     Returns:
         Path: Path to populated vault.db file
     """
-    conn = sqlite3.connect(vault_database)
-    cursor = conn.cursor()
+    with sqlite3.connect(vault_database) as conn:
+        cursor = conn.cursor()
 
-    # Insert sample tags
-    tags_data = [
-        ('software-architecture', 45),
-        ('software-development', 38),
-        ('security', 25),
-        ('design-principles', 20),
-        ('algorithms', 15),
-    ]
-    cursor.executemany("INSERT INTO tags (tag, file_count) VALUES (?, ?)", tags_data)
+        # Insert sample tags
+        tags_data = [
+            ('software-architecture',),
+            ('software-development',),
+            ('security',),
+            ('design-principles',),
+            ('algorithms',),
+        ]
+        cursor.executemany("INSERT INTO tags (tag) VALUES (?)", tags_data)
 
-    # Insert sample files
-    files_data = [
-        ('SOLID Principles.md', 1024, '.md', 1234567890.0),
-        ('Clean Code.md', 2048, '.md', 1234567891.0),
-        ('Security Best Practices.md', 1536, '.md', 1234567892.0),
-    ]
-    cursor.executemany("INSERT INTO files (path, size, extension, mtime) VALUES (?, ?, ?, ?)", files_data)
+        # Insert sample files
+        files_data = [
+            ('SOLID Principles.md', 1024, '2009-02-13T23:31:30', 'abc123'),
+            ('Clean Code.md', 2048, '2009-02-13T23:31:31', 'def456'),
+            ('Security Best Practices.md', 1536, '2009-02-13T23:31:32', 'ghi789'),
+        ]
+        cursor.executemany("INSERT INTO files (file_path, size_bytes, last_modified, content_hash) VALUES (?, ?, ?, ?)", files_data)
 
-    # Insert file-tag relationships
-    file_tags_data = [
-        ('SOLID Principles.md', 'software-architecture'),
-        ('SOLID Principles.md', 'design-principles'),
-        ('Clean Code.md', 'software-development'),
-        ('Security Best Practices.md', 'security'),
-    ]
-    cursor.executemany("INSERT INTO file_tags (file_path, tag) VALUES (?, ?)", file_tags_data)
+        # Insert file-tag relationships
+        file_tags_data = [
+            ('SOLID Principles.md', 'software-architecture'),
+            ('SOLID Principles.md', 'design-principles'),
+            ('Clean Code.md', 'software-development'),
+            ('Security Best Practices.md', 'security'),
+        ]
+        cursor.executemany("INSERT INTO file_tags (file_path, tag) VALUES (?, ?)", file_tags_data)
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
     return vault_database
 
@@ -193,10 +197,8 @@ def mock_vault_root(monkeypatch, temp_vault):
     def mock_get_vault_root():
         return temp_vault
 
-    # Mock for different modules
-    monkeypatch.setattr("Library.tags.common.get_vault_root", mock_get_vault_root)
-    monkeypatch.setattr("Library.images.common.get_vault_root", mock_get_vault_root)
-    monkeypatch.setattr("Library.index.common.get_vault_root", mock_get_vault_root)
+    # Mock vault_manager.core.vault.get_vault_root
+    monkeypatch.setattr("vault_manager.core.vault.get_vault_root", mock_get_vault_root)
 
     return temp_vault
 
@@ -213,8 +215,8 @@ def mock_database_path(monkeypatch, vault_database):
     def mock_get_database_path():
         return vault_database
 
-    monkeypatch.setattr("Library.index.common.get_database_path", mock_get_database_path)
-    monkeypatch.setattr("Library.tags.common.get_database_path", mock_get_database_path)
+    # Mock vault_manager.core.database.get_database_path
+    monkeypatch.setattr("vault_manager.core.database.get_database_path", mock_get_database_path)
 
     return vault_database
 
@@ -239,29 +241,37 @@ def sample_frontmatter():
         Dict: Dictionary of frontmatter examples
     """
     return {
-        'valid_with_tags': """---
-title: Test Note
-tags:
-  - test
-  - example
----
-""",
-        'valid_no_tags': """---
-title: Test Note
-author: Test Author
----
-""",
-        'invalid_yaml': """---
-title: "Unclosed quote
-tags:
-  - test
----
-""",
-        'empty': """---
----
-""",
-        'no_frontmatter': "# Just a heading\n\nNo frontmatter here."
-    }
+        'valid_with_tags': textwrap.dedent("""\
+            ---
+            title: Test Note
+            tags:
+              - test
+              - example
+            ---
+            """),
+        'valid_no_tags': textwrap.dedent("""\
+            ---
+            title: Test Note
+            author: Test Author
+            ---
+            """),
+        'invalid_yaml': textwrap.dedent("""\
+            ---
+            title: "Unclosed quote
+            tags:
+              - test
+            ---
+            """),
+        'empty': textwrap.dedent("""\
+            ---
+            ---
+            """),
+        'no_frontmatter': textwrap.dedent("""\
+            # Just a heading
+
+            No frontmatter here.
+            """),
+     }
 
 
 @pytest.fixture(autouse=True)

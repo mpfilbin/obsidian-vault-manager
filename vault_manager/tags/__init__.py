@@ -9,12 +9,12 @@ Commands:
     add             Use AI to generate and add tags to notes
 
 Usage:
-    python -m Library.tags <command> [options]
+    vault tags <command> [options]
 
 Examples:
-    python -m Library.tags tagless
-    python -m Library.tags tags --summary
-    python -m Library.tags add Personal --dry-run
+    vault tags tagless
+    vault tags tags --summary
+    vault tags add Personal --dry-run
 """
 
 __version__ = '2.0.0'

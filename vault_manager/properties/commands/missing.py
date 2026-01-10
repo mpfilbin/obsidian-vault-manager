@@ -5,7 +5,6 @@ This module implements the missing command which scans for markdown files
 that don't have YAML frontmatter.
 """
 
-import os
 import sys
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
@@ -13,7 +12,8 @@ from pathlib import Path
 from typing import List, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, extract_frontmatter
+from ..common import get_vault_root, extract_frontmatter
+from vault_manager.core.vault import iter_markdown_files, count_markdown_files
 
 
 class MissingCommand(Command):
@@ -94,29 +94,21 @@ class MissingCommand(Command):
             Tuple of (missing_files, total_files, files_with_frontmatter)
         """
         missing_files = []
-        total_files = 0
         files_with_frontmatter = 0
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        # Count total files first
+        total_files = count_markdown_files(
+            directory,
+            vault_root,
+            exclude_excalidraw=True
+        )
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
-
-            # Process markdown files
-            for filename in files:
-                if not filename.endswith('.md'):
-                    continue
-
-                # Skip Excalidraw files
-                if filename.endswith('.excalidraw.md'):
-                    continue
-
-                total_files += 1
-                file_path = root_path / filename
-
+        # Process each markdown file using iterator (memory-efficient)
+        for file_path in iter_markdown_files(
+            directory,
+            vault_root,
+            exclude_excalidraw=True
+        ):
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = f.read()

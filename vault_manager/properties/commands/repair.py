@@ -5,7 +5,6 @@ This module implements the repair command which reads the invalid-frontmatter.md
 report and attempts to fix issues for checked entries.
 """
 
-import os
 import re
 import shutil
 import sys
@@ -13,15 +12,17 @@ from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 from . import Command
 from ..common import get_vault_root
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 try:
     import yaml
     HAS_YAML = True
 except ImportError:
+    yaml = None
     HAS_YAML = False
 
 
@@ -66,7 +67,7 @@ class RepairCommand(Command):
         if not report_path.exists():
             print("Error: invalid-frontmatter.md not found")
             print("\nRun validation first:")
-            print("  python -m Library.properties validate")
+            print("  vault properties validate")
             sys.exit(1)
 
         # Display header
@@ -103,57 +104,56 @@ class RepairCommand(Command):
             print(f"Backup directory: {backup_dir}")
             print()
 
-        # Repair files
-        stats = {
-            'total': len(checked_items),
-            'repaired': 0,
-            'failed': 0,
-            'skipped': 0,
-            'backed_up': 0
-        }
+        # Repair files with DryRunContext
+        with DryRunContext(args.dry_run) as ctx:
+            ctx.stats.increment('total_files', len(checked_items))
 
-        for file_path, issues in checked_items.items():
-            print(f"Processing: {file_path}")
+            for file_path, issues in checked_items.items():
+                print(f"Processing: {file_path}")
 
-            full_path = vault_root / file_path
-            if not full_path.exists():
-                print(f"  ✗ File not found: {file_path}")
-                stats['failed'] += 1
-                continue
-
-            # Backup file if requested
-            if backup_dir and not args.dry_run:
-                try:
-                    backup_file_path = backup_dir / file_path
-                    backup_file_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(full_path, backup_file_path)
-                    stats['backed_up'] += 1
-                    print(f"  ✓ Backed up to: {backup_file_path.relative_to(vault_root)}")
-                except Exception as e:
-                    print(f"  ✗ Backup failed: {e}")
-                    stats['failed'] += 1
+                full_path = vault_root / file_path
+                if not full_path.exists():
+                    print(f"  ✗ File not found: {file_path}")
+                    ctx.stats.increment('files_failed')
                     continue
 
-            # Attempt repair
-            try:
-                repaired = self._repair_file(full_path, issues, args.dry_run)
-                if repaired:
-                    stats['repaired'] += 1
-                    if args.dry_run:
-                        print(f"  ✓ Would repair (dry-run)")
+                # Backup file if requested
+                if backup_dir and not args.dry_run:
+                    try:
+                        backup_file_path = backup_dir / file_path
+                        backup_file_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(full_path, backup_file_path)
+                        ctx.stats.increment('files_backed_up')
+                        print(f"  ✓ Backed up to: {backup_file_path.relative_to(vault_root)}")
+                    except Exception as e:
+                        print(f"  ✗ Backup failed: {e}")
+                        ctx.stats.increment('files_failed')
+                        continue
+
+                # Attempt repair
+                try:
+                    repaired = self._repair_file(full_path, issues, args.dry_run)
+                    if repaired:
+                        ctx.stats.increment('files_modified')
+                        ctx.record_change(full_path, f"Repaired frontmatter issues")
+                        if args.dry_run:
+                            print(f"  ✓ Would repair (dry-run)")
+                        else:
+                            print(f"  ✓ Repaired")
                     else:
-                        print(f"  ✓ Repaired")
-                else:
-                    stats['skipped'] += 1
-                    print(f"  ○ No repairs applied (may require manual intervention)")
-            except Exception as e:
-                print(f"  ✗ Repair failed: {e}")
-                stats['failed'] += 1
+                        ctx.stats.increment('files_skipped')
+                        print(f"  ○ No repairs applied (may require manual intervention)")
+                except Exception as e:
+                    print(f"  ✗ Repair failed: {e}")
+                    ctx.stats.increment('files_failed')
 
-            print()
+                print()
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
+            # Print summary
+            additional_info = None
+            if ctx.stats.custom_stats.get('files_backed_up', 0) > 0:
+                additional_info = f"Files backed up: {ctx.stats.custom_stats['files_backed_up']}"
+            print_dry_run_summary(ctx, additional_info=additional_info)
 
     def _parse_checked_items(self, report_path: Path, vault_root: Path) -> Dict[str, List[Tuple[str, str]]]:
         """
@@ -542,31 +542,3 @@ class RepairCommand(Command):
                 return True
 
         return False
-
-    def _print_summary(self, stats: dict, dry_run: bool) -> None:
-        """Print summary of repair results."""
-        print("=" * 60)
-        print("REPAIR SUMMARY")
-        print("=" * 60)
-        print(f"Total files processed: {stats['total']}")
-
-        if dry_run:
-            print(f"Would repair: {stats['repaired']}")
-        else:
-            print(f"Successfully repaired: {stats['repaired']}")
-            if stats['backed_up'] > 0:
-                print(f"Files backed up: {stats['backed_up']}")
-
-        print(f"Skipped (manual intervention needed): {stats['skipped']}")
-        print(f"Failed: {stats['failed']}")
-        print()
-
-        if dry_run:
-            print("This was a dry run. No files were modified.")
-            print("Run without --dry-run to apply repairs.")
-        elif stats['repaired'] > 0:
-            print("✓ Repairs completed successfully")
-            print("\nRecommendations:")
-            print("1. Run validation again to check for remaining issues:")
-            print("   python -m Library.properties validate")
-            print("2. Review the repaired files to ensure correctness")

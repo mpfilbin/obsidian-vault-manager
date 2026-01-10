@@ -6,16 +6,16 @@ This command adds or updates a specified property with a given value
 across all files in a directory, with optional filtering by tags.
 """
 
-import re
 import sys
-import yaml
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from vault_manager.core.command import Command
-from vault_manager.core.vault import get_vault_root, get_markdown_files
-from vault_manager.core.frontmatter import extract_tags_from_frontmatter
+from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
+from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.file_ops import safe_read, atomic_update
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class SetCommand(Command):
@@ -90,22 +90,26 @@ class SetCommand(Command):
         print(f"Mode: {'DRY RUN (preview only)' if dry_run else 'LIVE MODE'}")
         print(f"{'='*60}\n")
 
-        # Process all markdown files
+        # Process all markdown files with DryRunContext
         print("Processing files...\n")
-        stats = self._process_directory(
-            target_dir,
-            vault_root,
-            property_name,
-            value,
-            overwrite,
-            required_tags,
-            dry_run
-        )
+        with DryRunContext(dry_run) as ctx:
+            self._process_directory(
+                target_dir,
+                vault_root,
+                property_name,
+                value,
+                overwrite,
+                required_tags,
+                ctx
+            )
 
-        # Display summary
-        self._print_summary(stats, property_name, value, dry_run)
+            # Display summary
+            additional_info = f"Property: {property_name} = {value}"
+            if required_tags:
+                additional_info += f"\nFiltered by tags: {', '.join(sorted(required_tags))}"
+            print_dry_run_summary(ctx, additional_info=additional_info)
 
-        if stats['files_modified'] == 0:
+        if ctx.stats.files_modified == 0:
             if required_tags:
                 print(f"\nNo files found matching the specified tags.")
             else:
@@ -120,8 +124,8 @@ class SetCommand(Command):
         value: str,
         overwrite: bool,
         required_tags: Optional[set],
-        dry_run: bool
-    ) -> Dict:
+        ctx: DryRunContext
+    ) -> None:
         """
         Process all markdown files in the directory.
 
@@ -132,43 +136,37 @@ class SetCommand(Command):
             value: Value to set
             overwrite: Whether to overwrite existing properties
             required_tags: Set of tags that files must have (all of them)
-            dry_run: If True, don't modify files
-
-        Returns:
-            Dictionary with statistics
+            ctx: DryRunContext for tracking operations
         """
-        stats = {
-            'total_files': 0,
-            'files_with_frontmatter': 0,
-            'files_matched_tags': 0,
-            'files_modified': 0,
-            'files_skipped_has_property': 0,
-            'files_skipped_no_tags': 0,
-            'files_failed': 0,
-            'failed_files': []
-        }
-
         # Get all markdown files
         additional_ignores = {'Excalidraw', 'Calendar'}
-        markdown_files = get_markdown_files(
+
+        # Count files first for progress tracking
+        total_files = count_markdown_files(
             directory,
             vault_root,
             additional_ignores=additional_ignores,
             exclude_excalidraw=True
         )
+        ctx.stats.increment('total_files', total_files)
 
-        stats['total_files'] = len(markdown_files)
-
-        # Process each file
-        for file_path in markdown_files:
+        # Process each file using iterator (memory-efficient)
+        for file_path in iter_markdown_files(
+            directory,
+            vault_root,
+            additional_ignores=additional_ignores,
+            exclude_excalidraw=True
+        ):
             try:
+                ctx.stats.increment('files_processed')
+
                 # Check if file has required tags (if filtering)
                 if required_tags:
                     file_tags = self._get_file_tags(file_path)
                     if not required_tags.issubset(set(file_tags)):
-                        stats['files_skipped_no_tags'] += 1
+                        ctx.stats.increment('files_skipped_no_tags')
                         continue
-                    stats['files_matched_tags'] += 1
+                    ctx.stats.increment('files_matched_tags')
 
                 # Set property in file
                 success, modified = self._set_property_in_file(
@@ -177,25 +175,29 @@ class SetCommand(Command):
                     property_name,
                     value,
                     overwrite,
-                    dry_run
+                    ctx.dry_run
                 )
 
                 if modified:
-                    stats['files_modified'] += 1
+                    ctx.stats.increment('files_modified')
+                    ctx.record_change(
+                        file_path,
+                        f"Set property '{property_name}' = '{value}'"
+                    )
                     relative_path = file_path.relative_to(vault_root)
-                    mode_prefix = "[DRY RUN] Would set in" if dry_run else "Set in"
+                    mode_prefix = "[DRY RUN] Would set in" if ctx.dry_run else "Set in"
                     print(f"{mode_prefix} {relative_path}")
                 elif not success:
-                    stats['files_failed'] += 1
+                    ctx.stats.increment('files_failed')
                 else:
                     # File was skipped because it already has the property
-                    stats['files_skipped_has_property'] += 1
+                    ctx.stats.increment('files_skipped_has_property')
 
             except Exception as e:
-                stats['files_failed'] += 1
-                stats['failed_files'].append((file_path, str(e)))
-
-        return stats
+                ctx.stats.increment('files_failed')
+                ctx.stats.increment('failed_file_count')
+                relative_path = file_path.relative_to(vault_root)
+                print(f"  ✗ Failed: {relative_path} ({e})")
 
     def _get_file_tags(self, file_path: Path) -> List[str]:
         """
@@ -207,15 +209,12 @@ class SetCommand(Command):
         Returns:
             List of tags in the file
         """
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            tags = extract_tags_from_frontmatter(content)
-            return tags
-
-        except Exception:
+        content = safe_read(file_path, silent=True)
+        if content is None:
             return []
+
+        tags = FrontmatterManager.extract_tags_from_frontmatter(content)
+        return tags
 
     def _set_property_in_file(
         self,
@@ -240,99 +239,25 @@ class SetCommand(Command):
         Returns:
             Tuple of (success: bool, modified: bool)
         """
-        try:
-            # Read file content
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+        modified = False
 
-            # Extract frontmatter
-            frontmatter, body, has_frontmatter = self._extract_frontmatter(content)
+        def updater(content: str) -> Optional[str]:
+            nonlocal modified
 
-            # If no frontmatter, create it
-            if not has_frontmatter:
-                frontmatter_dict = {}
-            else:
-                try:
-                    frontmatter_dict = yaml.safe_load(frontmatter) or {}
-                except yaml.YAMLError:
-                    return False, False
+            # Check if property already exists (unless overwrite is enabled)
+            if not overwrite and FrontmatterManager.has_property(content, property_name):
+                return None  # Skip, not an error
 
-            # Check if property already exists
-            if property_name in frontmatter_dict and not overwrite:
-                return True, False  # Skip, not an error
-
-            # Set the property
-            frontmatter_dict[property_name] = value
-
-            # Serialize back to YAML
-            updated_frontmatter = yaml.dump(
-                frontmatter_dict,
-                default_flow_style=False,
-                allow_unicode=True,
-                sort_keys=False
+            # Update property using FrontmatterManager
+            updated_content, was_modified = FrontmatterManager.update_property(
+                content, property_name, value
             )
 
-            # Reconstruct the file content
-            if has_frontmatter:
-                updated_content = f"---\n{updated_frontmatter}---\n{body}"
-            else:
-                # Add frontmatter to file that didn't have it
-                updated_content = f"---\n{updated_frontmatter}---\n{content}"
+            if not was_modified:
+                return None
 
-            # Write back to file (unless dry-run)
-            if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
+            modified = True
+            return updated_content
 
-            return True, True
-
-        except Exception as e:
-            return False, False
-
-    def _extract_frontmatter(self, content: str) -> Tuple[str, str, bool]:
-        """
-        Extract YAML frontmatter from markdown content.
-
-        Args:
-            content: Full file content
-
-        Returns:
-            Tuple of (frontmatter_text, body, has_frontmatter)
-        """
-        frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n'
-        match = re.match(frontmatter_pattern, content, re.DOTALL)
-
-        if match:
-            frontmatter = match.group(1)
-            body = content[match.end():]
-            return frontmatter, body, True
-        else:
-            return '', content, False
-
-    def _print_summary(self, stats: Dict, property_name: str, value: str, dry_run: bool) -> None:
-        """Print summary statistics."""
-        print(f"\n{'='*60}")
-        print("Property Set Summary")
-        print(f"{'='*60}")
-        print(f"\nProperty: {property_name} = {value}")
-        print(f"\nStatistics:")
-        print(f"  Total files scanned: {stats['total_files']}")
-        if stats.get('files_matched_tags', 0) > 0 or stats.get('files_skipped_no_tags', 0) > 0:
-            print(f"  Files matching tags: {stats['files_matched_tags']}")
-            print(f"  Files skipped (tags): {stats['files_skipped_no_tags']}")
-        print(f"  Files modified: {stats['files_modified']}")
-        print(f"  Files skipped (already has property): {stats['files_skipped_has_property']}")
-
-        if stats['files_failed'] > 0:
-            print(f"\n  Failed files: {stats['files_failed']}")
-            if stats['failed_files']:
-                print("\n  Files that failed to process:")
-                for file_path, error in stats['failed_files'][:10]:
-                    print(f"    - {file_path}: {error}")
-                if len(stats['failed_files']) > 10:
-                    print(f"    ... and {len(stats['failed_files']) - 10} more")
-
-        print(f"\n{'='*60}")
-
-        if dry_run:
-            print("\nTo apply these changes, run the command without --dry-run flag.")
+        success = atomic_update(file_path, updater, dry_run=dry_run, silent=True)
+        return success, modified

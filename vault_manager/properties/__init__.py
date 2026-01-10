@@ -10,13 +10,13 @@ Commands:
     normalize     Standardize frontmatter properties across notes
 
 Usage:
-    python -m Library.properties <command> [options]
+    vault properties <command> [options]
 
 Examples:
-    python -m Library.properties summarize Personal --dry-run
-    python -m Library.properties relate Personal --max-related=3
-    python -m Library.properties missing Personal
-    python -m Library.properties normalize Personal --dry-run
+    vault properties summarize Personal --dry-run
+    vault properties relate Personal --max-related=3
+    vault properties missing Personal
+    vault properties normalize Personal --dry-run
 """
 
 __version__ = '2.0.0'

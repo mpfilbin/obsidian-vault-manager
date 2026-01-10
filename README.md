@@ -169,8 +169,9 @@ vault index rename apply
 
 ## Documentation
 
-- **Command Reference**: See `docs/README.md` for detailed command documentation
-- **Configuration Guide**: See `docs/configuration.md` for configuration options
+- **Configuration Guide**: See `docs/configuration.md` for detailed configuration options
+- **Installation Guide**: See `docs/installation.md` for installation instructions
+- **Testing Guide**: See `tests/README.md` for testing documentation and best practices
 - **Development**: See `docs/development.md` for contributing guidelines
 
 ## Requirements

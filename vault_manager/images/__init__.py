@@ -9,12 +9,12 @@ Commands:
     remove-alt    Remove alt text from wiki-link image embeds
 
 Usage:
-    python -m Library.images <command> [options]
+    vault images <command> [options]
 
 Examples:
-    python -m Library.images find
-    python -m Library.images cleanup
-    python -m Library.images remove-alt Personal --dry-run
+    vault images find
+    vault images cleanup
+    vault images remove-alt Personal --dry-run
 """
 
 __version__ = '2.0.0'

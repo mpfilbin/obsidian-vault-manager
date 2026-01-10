@@ -15,8 +15,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path, extract_frontmatter
+from ..common import get_vault_root, extract_frontmatter
 from vault_manager.index.common import get_database_path
+from vault_manager.core.vault import iter_markdown_files
+from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
 
 
 class NoteMetadata:
@@ -116,22 +119,27 @@ class RelateCommand(Command):
         related_map = self._find_related_notes(notes, args.max_related, vault_root)
 
         # Update files (filter to single file if needed)
-        if is_single_file:
-            target_file_relative = str(target_path.relative_to(vault_root))
-            notes_to_update = {k: v for k, v in notes.items() if k == target_file_relative}
-            stats = self._update_files_with_related(notes_to_update, related_map, vault_root, args.dry_run, args.overwrite)
-        else:
-            stats = self._update_files_with_related(notes, related_map, vault_root, args.dry_run, args.overwrite)
+        with DryRunContext(args.dry_run) as ctx:
+            ctx.stats.custom_stats['total_notes'] = len(notes)
+            ctx.stats.custom_stats['notes_with_relations'] = len(related_map)
 
-        # Print summary
-        self._print_summary(stats, args.dry_run)
+            if is_single_file:
+                target_file_relative = str(target_path.relative_to(vault_root))
+                notes_to_update = {k: v for k, v in notes.items() if k == target_file_relative}
+                self._update_files_with_related(notes_to_update, related_map, vault_root, ctx, args.overwrite)
+            else:
+                self._update_files_with_related(notes, related_map, vault_root, ctx, args.overwrite)
 
-        if not args.dry_run and stats['processed'] > 0:
-            print(f"\nDone! Updated {stats['processed']} file{'s' if stats['processed'] != 1 else ''}.")
-        elif args.dry_run and stats['processed'] > 0:
-            print(f"\nDry run complete. {stats['processed']} file{'s' if stats['processed'] != 1 else ''} would be updated.")
-        else:
-            print("\nNo files updated.")
+            # Print summary
+            self._print_custom_summary(ctx)
+            print_dry_run_summary(ctx)
+
+            if not args.dry_run and ctx.stats.files_processed > 0:
+                print(f"\nDone! Updated {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''}.")
+            elif args.dry_run and ctx.stats.files_processed > 0:
+                print(f"\nDry run complete. {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''} would be updated.")
+            else:
+                print("\nNo files updated.")
 
     def _get_tag_frequencies_from_database(self, vault_root: Path) -> Optional[Dict[str, int]]:
         """
@@ -150,72 +158,23 @@ class RelateCommand(Command):
             return None
 
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
 
-            # 3NF: Compute file_count from file_tags table
-            cursor.execute('''
-                SELECT ft.tag, COUNT(*) as file_count
-                FROM file_tags ft
-                GROUP BY ft.tag
-            ''')
+                # 3NF: Compute file_count from file_tags table
+                cursor.execute('''
+                    SELECT ft.tag, COUNT(*) as file_count
+                    FROM file_tags ft
+                    GROUP BY ft.tag
+                ''')
 
-            results = cursor.fetchall()
-            conn.close()
+                results = cursor.fetchall()
 
-            return {tag: count for tag, count in results}
+                return {tag: count for tag, count in results}
 
         except sqlite3.Error:
             # If there's any database error, return None
             return None
-
-    def _extract_tags_from_frontmatter(self, frontmatter: str) -> Set[str]:
-        """Extract tags from YAML frontmatter."""
-        tags = set()
-
-        lines = frontmatter.split('\n')
-        i = 0
-
-        while i < len(lines):
-            line = lines[i]
-
-            if line.strip().startswith('tags:'):
-                tags_value = line.split('tags:', 1)[1].strip()
-
-                # Handle inline array format
-                if tags_value.startswith('[') and tags_value.endswith(']'):
-                    tags_str = tags_value[1:-1]
-                    inline_tags = [t.strip().strip('"').strip("'") for t in tags_str.split(',')]
-                    tags.update([t for t in inline_tags if t])
-                    break
-
-                # Check next lines for list items
-                i += 1
-                while i < len(lines):
-                    next_line = lines[i].strip()
-
-                    if next_line and not next_line.startswith('-') and ':' in next_line and not next_line.startswith(' '):
-                        i -= 1
-                        break
-
-                    if next_line.startswith('-'):
-                        tag = next_line[1:].strip().strip('"').strip("'")
-                        if tag:
-                            tags.add(tag)
-                    elif not next_line:
-                        pass
-                    elif next_line.startswith(' '):
-                        pass
-                    else:
-                        i -= 1
-                        break
-
-                    i += 1
-                break
-
-            i += 1
-
-        return tags
 
     def _extract_wiki_links(self, content: str) -> Set[str]:
         """Extract wiki-links from markdown content."""
@@ -265,41 +224,30 @@ class RelateCommand(Command):
         else:
             print("\n1. Scanning notes and extracting metadata...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores={'Excalidraw', 'Calendar'}, exclude_excalidraw=True):
+            relative_path = str(file_path.relative_to(vault_root))
 
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
 
-            for filename in files:
-                if not filename.endswith('.md') or filename.endswith('.excalidraw.md'):
+                frontmatter, body = extract_frontmatter(content)
+
+                if frontmatter is None:
                     continue
 
-                file_path = root_path / filename
-                relative_path = str(file_path.relative_to(vault_root))
+                note = NoteMetadata(file_path, relative_path)
+                note.tags = set(FrontmatterManager.extract_tags_from_frontmatter(content))
+                note.links = self._extract_wiki_links(body)
+                note.title = file_path.name
+                note.title_words = self._extract_title_words(file_path.name)
+                note.folder = str(file_path.parent.relative_to(vault_root))
+                note.has_related = self._check_has_related_property(frontmatter)
 
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
+                notes[relative_path] = note
 
-                    frontmatter, body = extract_frontmatter(content)
-
-                    if frontmatter is None:
-                        continue
-
-                    note = NoteMetadata(file_path, relative_path)
-                    note.tags = self._extract_tags_from_frontmatter(frontmatter)
-                    note.links = self._extract_wiki_links(body)
-                    note.title = filename
-                    note.title_words = self._extract_title_words(filename)
-                    note.folder = str(file_path.parent.relative_to(vault_root))
-                    note.has_related = self._check_has_related_property(frontmatter)
-
-                    notes[relative_path] = note
-
-                except Exception as e:
-                    print(f"  Warning: Could not read {relative_path}: {e}")
+            except Exception as e:
+                print(f"  Warning: Could not read {relative_path}: {e}")
 
         print(f"   Found {len(notes)} notes with frontmatter")
         return notes
@@ -523,56 +471,42 @@ class RelateCommand(Command):
 
     def _update_files_with_related(self, notes: Dict[str, NoteMetadata],
                                    related_map: Dict[str, List[Tuple[str, float]]],
-                                   vault_root: Path, dry_run: bool, overwrite: bool) -> Dict:
+                                   vault_root: Path, ctx: DryRunContext, overwrite: bool) -> None:
         """Update files with related notes."""
-        stats = {
-            'total_notes': len(notes),
-            'notes_with_relations': len(related_map),
-            'processed': 0,
-            'skipped_has_related': 0,
-            'skipped_no_relations': 0,
-            'failed': 0
-        }
-
-        print(f"\n4. {'Would update' if dry_run else 'Updating'} files with related notes...")
+        print(f"\n4. {'Would update' if ctx.dry_run else 'Updating'} files with related notes...")
 
         for path, note in notes.items():
             if path not in related_map:
-                stats['skipped_no_relations'] += 1
+                ctx.stats.increment('skipped_no_relations')
                 continue
 
             if note.has_related and not overwrite:
                 print(f"  Skipping (has related): {path}")
-                stats['skipped_has_related'] += 1
+                ctx.stats.increment('skipped_has_related')
                 continue
 
             related_paths = [r[0] for r in related_map[path]]
 
-            if self._update_file_with_related(note.path, related_paths, vault_root, dry_run, overwrite):
-                stats['processed'] += 1
-                mode = "Would add" if dry_run else "Added"
+            if self._update_file_with_related(note.path, related_paths, vault_root, ctx.dry_run, overwrite):
+                ctx.stats.increment('files_processed')
+                ctx.record_change(
+                    note.path,
+                    f"Added {len(related_paths)} related note(s)",
+                    related_notes=related_paths
+                )
+                mode = "Would add" if ctx.dry_run else "Added"
                 print(f"  {mode} related to: {path}")
                 for rel_path, score in related_map[path]:
                     print(f"    - {rel_path} (score: {score:.3f})")
             else:
-                stats['failed'] += 1
+                ctx.stats.increment('files_failed')
 
-        return stats
-
-    def _print_summary(self, stats: Dict, dry_run: bool = False) -> None:
-        """Print summary of processing results."""
+    def _print_custom_summary(self, ctx: DryRunContext) -> None:
+        """Print custom summary of processing results."""
         print("\n" + "=" * 60)
-        print(f"{'DRY RUN ' if dry_run else ''}SUMMARY")
+        print("Related Notes Details")
         print("=" * 60)
-        print(f"Total notes scanned: {stats['total_notes']}")
-        print(f"Notes with relations found: {stats['notes_with_relations']}")
-        print(f"Files updated: {stats['processed']}")
-        print(f"Skipped (has related): {stats['skipped_has_related']}")
-        print(f"Skipped (no relations): {stats['skipped_no_relations']}")
-        print(f"Failed: {stats['failed']}")
-
-        if dry_run and stats['processed'] > 0:
-            print("\n" + "=" * 60)
-            print("This was a DRY RUN - no files were actually modified.")
-            print("Run without --dry-run to apply changes.")
-            print("=" * 60)
+        print(f"Total notes scanned: {ctx.stats.custom_stats.get('total_notes', 0)}")
+        print(f"Notes with relations found: {ctx.stats.custom_stats.get('notes_with_relations', 0)}")
+        print(f"Skipped (has related): {ctx.stats.custom_stats.get('skipped_has_related', 0)}")
+        print(f"Skipped (no relations): {ctx.stats.custom_stats.get('skipped_no_relations', 0)}")

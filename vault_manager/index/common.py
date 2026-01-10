@@ -7,7 +7,6 @@ New code should import common functions directly from vault_manager.core when po
 """
 
 import hashlib
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -102,9 +101,9 @@ def compute_file_hash(file_path: Path, max_size_mb: int = 100) -> Optional[str]:
         64-character hex string SHA-256 hash, or None if file is too large or cannot be read
 
     Examples:
-        >>> compute_file_hash(Path('small.txt'))
+        >> compute_file_hash(Path('small.txt'))
         'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-        >>> compute_file_hash(Path('large_video.mp4'), max_size_mb=10)
+        >> compute_file_hash(Path('large_video.mp4'), max_size_mb=10)
         None
     """
     try:
@@ -139,11 +138,11 @@ def get_file_extension_category(ext: str) -> str:
         Category: 'markdown', 'image', 'document', 'code', 'data', 'archive', 'other'
 
     Examples:
-        >>> get_file_extension_category('.md')
+        >> get_file_extension_category('.md')
         'markdown'
-        >>> get_file_extension_category('.png')
+        >> get_file_extension_category('.png')
         'image'
-        >>> get_file_extension_category('.pdf')
+        >> get_file_extension_category('.pdf')
         'document'
     """
     ext = ext.lower()
@@ -186,11 +185,11 @@ def format_file_size(size_bytes: int) -> str:
         Formatted string like '1.5 MB', '500 KB', '2 GB'
 
     Examples:
-        >>> format_file_size(1024)
+        >> format_file_size(1024)
         '1.0 KB'
-        >>> format_file_size(1536)
+        >> format_file_size(1536)
         '1.5 KB'
-        >>> format_file_size(1048576)
+        >> format_file_size(1048576)
         '1.0 MB'
     """
     if size_bytes < 1024:
@@ -243,7 +242,7 @@ def format_timestamp(timestamp: float) -> str:
         ISO 8601 formatted string (YYYY-MM-DD HH:MM:SS)
 
     Examples:
-        >>> format_timestamp(1640000000.0)
+        >> format_timestamp(1640000000.0)
         '2021-12-20 13:33:20'
     """
     from datetime import datetime

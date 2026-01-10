@@ -5,21 +5,23 @@ This module implements the validate command which checks frontmatter against
 Obsidian's property rules and generates a report of invalid frontmatter.
 """
 
-import os
 import re
 import sys
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple
 
 from . import Command
-from ..common import get_vault_root, is_ignored_path
+from ..common import get_vault_root
+from vault_manager.core.vault import iter_markdown_files, validate_directory
+from vault_manager.core.file_ops import safe_read, safe_write
 
 try:
     import yaml
     HAS_YAML = True
 except ImportError:
+    yaml = None
     HAS_YAML = False
 
 
@@ -63,21 +65,8 @@ class ValidateCommand(Command):
         # Get vault root
         vault_root = get_vault_root()
 
-        # Resolve directory path
-        if args.directory == '.':
-            target_dir = vault_root
-        else:
-            target_dir = vault_root / args.directory
-
         # Validate directory
-        if not target_dir.exists():
-            print(f"Error: Directory not found: {args.directory}")
-            print(f"Looking for: {target_dir}")
-            sys.exit(1)
-
-        if not target_dir.is_dir():
-            print(f"Error: Not a directory: {args.directory}")
-            sys.exit(1)
+        target_dir = validate_directory(args.directory, vault_root)
 
         # Display header
         print("=" * 60)
@@ -106,12 +95,12 @@ class ValidateCommand(Command):
         """
         # Frontmatter must be at the very top
         if not content.startswith('---'):
-            return None, content, 0, 0
+            return "", content, 0, 0
 
         # Find the closing ---
         lines = content.split('\n')
         if len(lines) < 3:
-            return None, content, 0, 0
+            return "", content, 0, 0
 
         # Find closing delimiter
         end_idx = None
@@ -121,7 +110,7 @@ class ValidateCommand(Command):
                 break
 
         if end_idx is None:
-            return None, content, 0, 0
+            return "", content, 0, 0
 
         frontmatter_lines = lines[1:end_idx]
         frontmatter_text = '\n'.join(frontmatter_lines)
@@ -343,42 +332,40 @@ class ValidateCommand(Command):
         """Validate a single file's frontmatter."""
         all_issues = []
 
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            # Check frontmatter position
-            all_issues.extend(self._validate_frontmatter_position(content, file_path))
-
-            # Extract frontmatter
-            frontmatter_text, body, start_line, end_line = self._extract_frontmatter_raw(content)
-
-            if frontmatter_text is None:
-                # No frontmatter found - add as warning
-                all_issues.append(ValidationIssue(
-                    'warning',
-                    'missing_frontmatter',
-                    'File does not contain YAML frontmatter'
-                ))
-                return all_issues
-
-            # Validate YAML syntax
-            all_issues.extend(self._validate_yaml_syntax(frontmatter_text))
-
-            # If YAML is valid, run additional checks
-            syntax_errors = [i for i in all_issues if i.issue_type == 'yaml_syntax_error']
-            if not syntax_errors:
-                all_issues.extend(self._validate_property_names(frontmatter_text))
-                all_issues.extend(self._validate_tags(frontmatter_text))
-                all_issues.extend(self._validate_links(frontmatter_text))
-                all_issues.extend(self._validate_no_markdown(frontmatter_text))
-
-        except Exception as e:
+        content = safe_read(file_path, silent=True)
+        if content is None:
             all_issues.append(ValidationIssue(
                 'error',
                 'file_read_error',
-                f'Error reading file: {str(e)}'
+                f'Error reading file'
             ))
+            return all_issues
+
+        # Check frontmatter position
+        all_issues.extend(self._validate_frontmatter_position(content, file_path))
+
+        # Extract frontmatter
+        frontmatter_text, body, start_line, end_line = self._extract_frontmatter_raw(content)
+
+        if frontmatter_text is None:
+            # No frontmatter found - add as warning
+            all_issues.append(ValidationIssue(
+                'warning',
+                'missing_frontmatter',
+                'File does not contain YAML frontmatter'
+            ))
+            return all_issues
+
+        # Validate YAML syntax
+        all_issues.extend(self._validate_yaml_syntax(frontmatter_text))
+
+        # If YAML is valid, run additional checks
+        syntax_errors = [i for i in all_issues if i.issue_type == 'yaml_syntax_error']
+        if not syntax_errors:
+            all_issues.extend(self._validate_property_names(frontmatter_text))
+            all_issues.extend(self._validate_tags(frontmatter_text))
+            all_issues.extend(self._validate_links(frontmatter_text))
+            all_issues.extend(self._validate_no_markdown(frontmatter_text))
 
         return all_issues
 
@@ -390,30 +377,20 @@ class ValidateCommand(Command):
 
         print("\nValidating frontmatter...")
 
-        for root, dirs, files in os.walk(directory):
-            root_path = Path(root)
+        # Use iter_markdown_files for memory-efficient traversal
+        additional_ignores = {'Excalidraw'}
+        for file_path in iter_markdown_files(directory, vault_root, additional_ignores):
+            total_files += 1
+            relative_path = str(file_path.relative_to(vault_root))
 
-            # Skip ignored directories
-            if is_ignored_path(root_path, vault_root):
-                dirs[:] = []
-                continue
+            issues = self._validate_file(file_path, vault_root)
 
-            for filename in files:
-                if not filename.endswith('.md') or filename.endswith('.excalidraw.md'):
-                    continue
-
-                total_files += 1
-                file_path = root_path / filename
-                relative_path = str(file_path.relative_to(vault_root))
-
-                issues = self._validate_file(file_path, vault_root)
-
-                if issues:
-                    issues_by_file[relative_path] = issues
-                    files_with_issues += 1
-                    error_count = sum(1 for i in issues if i.severity == 'error')
-                    warning_count = sum(1 for i in issues if i.severity == 'warning')
-                    print(f"  ✗ {relative_path}: {error_count} error(s), {warning_count} warning(s)")
+            if issues:
+                issues_by_file[relative_path] = issues
+                files_with_issues += 1
+                error_count = sum(1 for i in issues if i.severity == 'error')
+                warning_count = sum(1 for i in issues if i.severity == 'warning')
+                print(f"  ✗ {relative_path}: {error_count} error(s), {warning_count} warning(s)")
 
         print(f"\nScanned {total_files} files, found {files_with_issues} with issues")
 
@@ -480,10 +457,11 @@ class ValidateCommand(Command):
             lines.append("")
 
         # Write report
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
-
-        print(f"\nReport generated: {report_path}")
+        success = safe_write(report_path, '\n'.join(lines))
+        if success:
+            print(f"\nReport generated: {report_path}")
+        else:
+            print(f"\nError: Failed to write report to {report_path}")
 
     def _print_summary(self, issues_by_file: Dict[str, List[ValidationIssue]]) -> None:
         """Print summary of validation results."""

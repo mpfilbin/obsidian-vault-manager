@@ -7,16 +7,15 @@ and generates a comprehensive markdown report with statistics and usage patterns
 """
 
 import re
-import sys
 import yaml
 from argparse import ArgumentParser, Namespace
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict
 
 from vault_manager.core.command import Command
-from vault_manager.core.vault import get_vault_root, get_markdown_files
+from vault_manager.core.vault import get_vault_root, iter_markdown_files, count_markdown_files
 
 
 class AuditCommand(Command):
@@ -81,17 +80,22 @@ class AuditCommand(Command):
 
         # Get all markdown files
         additional_ignores = {'Excalidraw'}
-        markdown_files = get_markdown_files(
+
+        # Count files first for progress tracking
+        data['total_files'] = count_markdown_files(
             vault_root,
             vault_root,
             additional_ignores=additional_ignores,
             exclude_excalidraw=True
         )
 
-        data['total_files'] = len(markdown_files)
-
-        # Process each file
-        for file_path in markdown_files:
+        # Process each file using iterator (memory-efficient)
+        for file_path in iter_markdown_files(
+            vault_root,
+            vault_root,
+            additional_ignores=additional_ignores,
+            exclude_excalidraw=True
+        ):
             try:
                 content = file_path.read_text(encoding='utf-8')
                 frontmatter_dict = self._extract_frontmatter_dict(content)
@@ -161,7 +165,7 @@ class AuditCommand(Command):
         match = re.match(frontmatter_pattern, content, re.DOTALL)
 
         if not match:
-            return None
+            return Dict()
 
         frontmatter_text = match.group(1)
 
@@ -169,7 +173,7 @@ class AuditCommand(Command):
             frontmatter_dict = yaml.safe_load(frontmatter_text)
             return frontmatter_dict if isinstance(frontmatter_dict, dict) else None
         except yaml.YAMLError:
-            return None
+            return Dict()
 
     def _get_type_name(self, value: Any) -> str:
         """
