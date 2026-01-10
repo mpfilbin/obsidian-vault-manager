@@ -323,8 +323,8 @@ class TestExecuteSingle:
 
         assert result == ('a',)
 
-    def test_execute_single_returns_none_when_no_match(self, temp_vault):
-        """execute_single should return None when no matching rows."""
+    def test_execute_single_returns_empty_tuple_when_no_match(self, temp_vault):
+        """execute_single should return empty tuple when no matching rows."""
         db_path = temp_vault / 'test.db'
 
         with get_database_connection(db_path) as conn:
@@ -337,7 +337,8 @@ class TestExecuteSingle:
             db_path=db_path
         )
 
-        assert result is None
+        assert result == ()
+        assert len(result) == 0
 
     def test_execute_single_with_count(self, temp_vault):
         """execute_single should work for aggregate queries like COUNT."""

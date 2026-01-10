@@ -225,7 +225,7 @@ class QueryCommand(Command):
             WHERE tag = ?
         ''', (tag,), db_path=db_path)
 
-        if not result or result[0] == 0:
+        if len(result) == 0 or result[0] == 0:
             print(f"Tag '{tag}' not found in database")
             return
 

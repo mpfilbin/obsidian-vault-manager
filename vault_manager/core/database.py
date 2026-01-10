@@ -14,10 +14,10 @@ from functools import wraps
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-
 # ============================================================================
 # Database Path Utilities
 # ============================================================================
+
 
 def get_database_path(vault_root: Optional[Path] = None) -> Path:
     """
@@ -37,9 +37,10 @@ def get_database_path(vault_root: Optional[Path] = None) -> Path:
     """
     if vault_root is None:
         from vault_manager.core.vault import get_vault_root
+
         vault_root = get_vault_root()
 
-    return Path(vault_root) / 'vault.db'
+    return Path(vault_root) / "vault.db"
 
 
 def ensure_database_path(vault_root: Optional[Path] = None) -> Path:
@@ -69,6 +70,7 @@ def ensure_database_path(vault_root: Optional[Path] = None) -> Path:
 # Database Connection Management
 # ============================================================================
 
+
 def configure_connection(conn: sqlite3.Connection) -> None:
     """
     Apply standard configuration to a database connection.
@@ -83,13 +85,12 @@ def configure_connection(conn: sqlite3.Connection) -> None:
         >> conn = sqlite3.connect('vault.db')
         >> configure_connection(conn)
     """
-    conn.execute('PRAGMA foreign_keys = ON')
+    conn.execute("PRAGMA foreign_keys = ON")
 
 
 @contextmanager
 def get_database_connection(
-    db_path: Optional[Path] = None,
-    read_only: bool = False
+    db_path: Optional[Path] = None, read_only: bool = False
 ) -> sqlite3.Connection:
     """
     Get a database connection with automatic cleanup.
@@ -192,11 +193,8 @@ def transaction(db_path: Optional[Path] = None):
 # Query Helper Functions
 # ============================================================================
 
-def execute_query(
-    sql: str,
-    params: Tuple = (),
-    db_path: Optional[Path] = None
-) -> List[Tuple]:
+
+def execute_query(sql: str, params: Tuple = (), db_path: Optional[Path] = None) -> List[Tuple]:
     """
     Execute SELECT query and return all results.
 
@@ -237,9 +235,7 @@ def execute_query(
 
 
 def execute_query_with_columns(
-    sql: str,
-    params: Tuple = (),
-    db_path: Optional[Path] = None
+    sql: str, params: Tuple = (), db_path: Optional[Path] = None
 ) -> Tuple[List[str], List[Tuple]]:
     """
     Execute SELECT query and return column names and results.
@@ -278,17 +274,15 @@ def execute_query_with_columns(
         cursor = conn.cursor()
         cursor.execute(sql, params)
         results = cursor.fetchall()
-        column_names = [description[0] for description in cursor.description] if cursor.description else []
+        column_names = (
+            [description[0] for description in cursor.description] if cursor.description else []
+        )
         return column_names, results
 
 
-def execute_single(
-    sql: str,
-    params: Tuple = (),
-    db_path: Optional[Path] = None
-) -> Optional[Tuple]:
+def execute_single(sql: str, params: Tuple = (), db_path: Optional[Path] = None) -> Tuple:
     """
-    Execute SELECT query and return single result or None.
+    Execute SELECT query and return single result or empty tuple.
 
     Convenience function for queries expected to return zero or one row.
 
@@ -298,7 +292,7 @@ def execute_single(
         db_path: Path to database file. If None, uses vault.db in vault root
 
     Returns:
-        Single result tuple, or None if no results
+        Single result tuple, or empty tuple if no results
 
     Raises:
         sqlite3.Error: On database or SQL errors
@@ -314,22 +308,19 @@ def execute_single(
         >> count = row[0] if row else 0
 
         >> # Check existence
-        >> exists = execute_single(
+        >> exists = bool(execute_single(
         ...     "SELECT 1 FROM files WHERE path = ?",
         ...     ("note.md",)
-        ... ) is not None
+        ... ))
     """
     with get_database_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(sql, params)
-        return cursor.fetchone()
+        result = cursor.fetchone()
+        return result if result is not None else ()
 
 
-def execute_write(
-    sql: str,
-    params: Tuple = (),
-    db_path: Optional[Path] = None
-) -> int:
+def execute_write(sql: str, params: Tuple = (), db_path: Optional[Path] = None) -> int:
     """
     Execute INSERT/UPDATE/DELETE and return affected row count.
 
@@ -374,11 +365,7 @@ def execute_write(
         return cursor.rowcount
 
 
-def execute_many(
-    sql: str,
-    param_list: List[Tuple],
-    db_path: Optional[Path] = None
-) -> int:
+def execute_many(sql: str, param_list: List[Tuple], db_path: Optional[Path] = None) -> int:
     """
     Execute batch INSERT/UPDATE/DELETE operations.
 
@@ -423,6 +410,7 @@ def execute_many(
 # Database Rebuild and Validation
 # ============================================================================
 
+
 def rebuild_vault_database(silent: bool = False, verbose: bool = False) -> bool:
     """
     Rebuild the vault index database.
@@ -446,17 +434,17 @@ def rebuild_vault_database(silent: bool = False, verbose: bool = False) -> bool:
         from vault_manager.index.commands.build import BuildCommand
 
         if not silent:
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print("Rebuilding vault index database...")
-            print(f"{'='*60}\n")
+            print(f"{'=' * 60}\n")
 
         # Create build command with all required arguments
         build_cmd = BuildCommand()
         build_args = Namespace(
-            force=True,           # Force full rebuild
-            incremental=False,    # Not incremental
-            no_hash=False,        # Include hashing for duplicate detection
-            max_hash_size=100     # Default max hash size in MB
+            force=True,  # Force full rebuild
+            incremental=False,  # Not incremental
+            no_hash=False,  # Include hashing for duplicate detection
+            max_hash_size=100,  # Default max hash size in MB
         )
 
         # Execute the build
@@ -498,19 +486,19 @@ def get_database_stats(db_path: Optional[Path] = None) -> dict:
 
             # Get total files
             cursor.execute("SELECT COUNT(*) FROM files")
-            stats['total_files'] = cursor.fetchone()[0]
+            stats["total_files"] = cursor.fetchone()[0]
 
             # Get total tags
             cursor.execute("SELECT COUNT(DISTINCT tag) FROM file_tags")
-            stats['total_tags'] = cursor.fetchone()[0]
+            stats["total_tags"] = cursor.fetchone()[0]
 
             # Get total links
             cursor.execute("SELECT COUNT(*) FROM links")
-            stats['total_links'] = cursor.fetchone()[0]
+            stats["total_links"] = cursor.fetchone()[0]
 
             # Get files with frontmatter
             cursor.execute("SELECT COUNT(*) FROM files WHERE has_frontmatter = 1")
-            stats['files_with_frontmatter'] = cursor.fetchone()[0]
+            stats["files_with_frontmatter"] = cursor.fetchone()[0]
 
             # Get metadata
             cursor.execute("SELECT key, value FROM metadata")
@@ -520,7 +508,7 @@ def get_database_stats(db_path: Optional[Path] = None) -> dict:
             return stats
 
     except Exception as e:
-        return {'error': str(e)}
+        return {"error": str(e)}
 
 
 def database_exists(vault_root: Optional[Path] = None) -> bool:
@@ -557,9 +545,7 @@ def require_database(vault_root, command_name: str = "this command") -> None:
 
 
 def rebuild_if_needed(
-    skip: bool = False,
-    message: Optional[str] = None,
-    silent: bool = False
+    skip: bool = False, message: Optional[str] = None, silent: bool = False
 ) -> bool:
     """
     Rebuild database with optional skip.
@@ -638,6 +624,7 @@ def auto_rebuild_after(operation_name: str):
         ...         # Rename tags in files
         ...         ...
     """
+
     def decorator(func):
         @wraps(func)
         def wrapper(self, args):
@@ -645,9 +632,11 @@ def auto_rebuild_after(operation_name: str):
             result = func(self, args)
 
             # Rebuild database after command completes
-            skip_rebuild = getattr(args, 'no_rebuild', False)
+            skip_rebuild = getattr(args, "no_rebuild", False)
             rebuild_if_needed(skip=skip_rebuild)
 
             return result
+
         return wrapper
+
     return decorator
