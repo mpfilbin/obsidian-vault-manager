@@ -184,12 +184,12 @@ class ReorganizeCommand(Command):
         existing_parents: Dict[str, List[str]],
         tags_data: Dict[str, int],
         max_suggestions: int,
-    ) -> List[Tuple[str, str, str, float]]:
+    ) -> List[Tuple[str, str, str, float, str]]:
         """
         Generate reorganization suggestions using rule-based analysis.
 
         Returns:
-            List of (tag, suggested_parent, suggested_full_path, confidence) tuples
+            List of (tag, suggested_parent, suggested_full_path, confidence, reason) tuples
         """
         suggestions = []
 
@@ -331,7 +331,7 @@ class ReorganizeCommand(Command):
             response = client.messages.create(
                 model="claude-sonnet-4-5-20250929",
                 max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]
             )
 
             # Parse AI response
@@ -514,16 +514,17 @@ class ReorganizeCommand(Command):
         lines.append("")
         lines.append("Review the suggestions above and apply them using the provided commands:")
         lines.append("")
+
+        # Get example tag and path for usage instructions
+        example_tag = suggestions[0][0] if suggestions else "tag-name"
+        example_path = suggestions[0][2] if suggestions else "parent/tag-name"
+
         lines.append("```bash")
         lines.append("# Preview a reorganization (dry run)")
-        if suggestions:
-            example_tag = suggestions[0][0]
-            example_path = suggestions[0][2]
-            lines.append(f"vault tags rename {example_tag} {example_path} --dry-run")
+        lines.append(f"vault tags rename {example_tag} {example_path} --dry-run")
         lines.append("")
         lines.append("# Apply a reorganization")
-        if suggestions:
-            lines.append(f"vault tags rename {example_tag} {example_path}")
+        lines.append(f"vault tags rename {example_tag} {example_path}")
         lines.append("```")
         lines.append("")
         lines.append(

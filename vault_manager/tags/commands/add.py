@@ -458,7 +458,7 @@ class AddCommand(Command):
         message = client.messages.create(
             model="claude-sonnet-4-5-20250929",
             max_tokens=150,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]
         )
 
         # Parse the response
