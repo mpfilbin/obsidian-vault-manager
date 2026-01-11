@@ -8,9 +8,9 @@ to update vault.db. All tag data is stored in the vault.db SQLite database.
 import sys
 from argparse import ArgumentParser, Namespace
 
+from vault_manager.core.database import VaultDatabase
+
 from . import Command
-from ..common import get_vault_root
-from vault_manager.index.common import get_database_path
 
 
 class TagsInventoryCommand(Command):
@@ -23,7 +23,8 @@ class TagsInventoryCommand(Command):
 
     def execute(self, args: Namespace) -> None:
         """Execute the tags inventory command."""
-        vault_root = get_vault_root()
+        db = VaultDatabase()
+        vault_root = db.vault_root
         old_db = vault_root / 'vault-tags.db'
 
         # Show migration notice if old database exists
@@ -51,14 +52,12 @@ class TagsInventoryCommand(Command):
             sys.argv = original_argv
 
         # Verify database was created
-        db_path = get_database_path()
-
-        if not db_path.exists():
-            print(f"\nError: vault.db not found. Index build may have failed.")
+        if not db.exists():
+            print("\nError: vault.db not found. Index build may have failed.")
             sys.exit(1)
 
         print("\nDone!")
-        print(f"\nTag data is now available in: {db_path}")
+        print(f"\nTag data is now available in: {db.db_path}")
         print("\nQuery the database with:")
         print("  vault tags query --stats")
         print("  vault tags query --most-used 10")

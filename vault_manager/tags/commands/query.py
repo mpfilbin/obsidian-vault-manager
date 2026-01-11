@@ -7,15 +7,9 @@ SQLite database with predefined queries or custom SQL.
 
 import sys
 from argparse import ArgumentParser, Namespace
-from pathlib import Path
 from typing import List
 
-from vault_manager.core.database import (
-    execute_query,
-    execute_query_with_columns,
-    execute_single,
-    get_database_path,
-)
+from vault_manager.core.database import VaultDatabase
 
 from . import Command
 
@@ -69,41 +63,35 @@ class QueryCommand(Command):
 
     def execute(self, args: Namespace) -> None:
         """Execute the query command."""
-        db_path = get_database_path()
+        with VaultDatabase() as db:
+            db.require_exists("tags query")
 
-        # Check if database exists
-        if not db_path.exists():
-            print(f"Error: Database not found: {db_path}")
-            print("\nGenerate it first with:")
-            print("  vault index build")
-            sys.exit(1)
+            # Determine which query to run
+            if args.sql:
+                self._execute_custom_sql(db, args.sql)
+            elif args.most_used is not None:
+                self._query_most_used(db, args.most_used)
+            elif args.least_used is not None:
+                self._query_least_used(db, args.least_used)
+            elif args.files_with:
+                self._query_files_with_all_tags(db, args.files_with)
+            elif args.files_with_any:
+                self._query_files_with_any_tags(db, args.files_with_any)
+            elif args.tag_info:
+                self._query_tag_info(db, args.tag_info)
+            elif args.stats:
+                self._query_stats(db)
+            else:
+                print("Error: No query specified")
+                print("Use --help to see available query options")
+                sys.exit(1)
 
-        # Determine which query to run
-        if args.sql:
-            self._execute_custom_sql(db_path, args.sql)
-        elif args.most_used is not None:
-            self._query_most_used(db_path, args.most_used)
-        elif args.least_used is not None:
-            self._query_least_used(db_path, args.least_used)
-        elif args.files_with:
-            self._query_files_with_all_tags(db_path, args.files_with)
-        elif args.files_with_any:
-            self._query_files_with_any_tags(db_path, args.files_with_any)
-        elif args.tag_info:
-            self._query_tag_info(db_path, args.tag_info)
-        elif args.stats:
-            self._query_stats(db_path)
-        else:
-            print("Error: No query specified")
-            print("Use --help to see available query options")
-            sys.exit(1)
-
-    def _execute_custom_sql(self, db_path: Path, sql: str) -> None:
+    def _execute_custom_sql(self, db: VaultDatabase, sql: str) -> None:
         """Execute custom SQL query and display results."""
         print(f"Executing SQL query:\n{sql}\n")
 
         try:
-            col_names, results = execute_query_with_columns(sql, db_path=db_path)
+            col_names, results = db.query_with_columns(sql)
 
             if not results:
                 print("No results")
@@ -122,17 +110,17 @@ class QueryCommand(Command):
             print(f"SQL Error: {e}")
             sys.exit(1)
 
-    def _query_most_used(self, db_path: Path, n: int) -> None:
+    def _query_most_used(self, db: VaultDatabase, n: int) -> None:
         """Query for N most used tags (3NF: compute file_count from file_tags)."""
         print(f"Top {n} most used tags:\n")
 
-        results = execute_query('''
+        results = db.query('''
             SELECT ft.tag, COUNT(*) as file_count
             FROM file_tags ft
             GROUP BY ft.tag
             ORDER BY file_count DESC
             LIMIT ?
-        ''', (n,), db_path=db_path)
+        ''', (n,))
 
         if not results:
             print("No tags found")
@@ -143,17 +131,17 @@ class QueryCommand(Command):
             for i, (tag, count) in enumerate(results, 1):
                 print(f"{i:2d}. {tag:<{max_tag_len}} : {count:4d} files")
 
-    def _query_least_used(self, db_path: Path, n: int) -> None:
+    def _query_least_used(self, db: VaultDatabase, n: int) -> None:
         """Query for N least used tags (3NF: compute file_count from file_tags)."""
         print(f"Top {n} least used tags:\n")
 
-        results = execute_query('''
+        results = db.query('''
             SELECT ft.tag, COUNT(*) as file_count
             FROM file_tags ft
             GROUP BY ft.tag
             ORDER BY file_count
             LIMIT ?
-        ''', (n,), db_path=db_path)
+        ''', (n,))
 
         if not results:
             print("No tags found")
@@ -164,7 +152,7 @@ class QueryCommand(Command):
             for i, (tag, count) in enumerate(results, 1):
                 print(f"{i:2d}. {tag:<{max_tag_len}} : {count:4d} file{'s' if count != 1 else ''}")
 
-    def _query_files_with_all_tags(self, db_path: Path, tags: List[str]) -> None:
+    def _query_files_with_all_tags(self, db: VaultDatabase, tags: List[str]) -> None:
         """Query for files tagged with ALL specified tags."""
         print(f"Files tagged with ALL of: {', '.join(tags)}\n")
 
@@ -183,7 +171,7 @@ class QueryCommand(Command):
         try:
             # Parameters: all tags + count of tags
             params = tuple(tags) + (len(tags),)
-            results = execute_query(query, params, db_path=db_path)
+            results = db.query(query, params)
 
             if not results:
                 print(f"No files found with all tags: {', '.join(tags)}")
@@ -197,7 +185,7 @@ class QueryCommand(Command):
             print(f"SQL Error: {e}")
             sys.exit(1)
 
-    def _query_files_with_any_tags(self, db_path: Path, tags: List[str]) -> None:
+    def _query_files_with_any_tags(self, db: VaultDatabase, tags: List[str]) -> None:
         """Query for files tagged with ANY of the specified tags."""
         print(f"Files tagged with ANY of: {', '.join(tags)}\n")
 
@@ -211,7 +199,7 @@ class QueryCommand(Command):
         '''
 
         try:
-            results = execute_query(query, tuple(tags), db_path=db_path)
+            results = db.query(query, tuple(tags))
 
             if not results:
                 print(f"No files found with any of: {', '.join(tags)}")
@@ -225,16 +213,16 @@ class QueryCommand(Command):
             print(f"SQL Error: {e}")
             sys.exit(1)
 
-    def _query_tag_info(self, db_path: Path, tag: str) -> None:
+    def _query_tag_info(self, db: VaultDatabase, tag: str) -> None:
         """Query detailed information about a specific tag (3NF: compute file_count)."""
         print(f"Tag: {tag}\n")
 
         # Get tag info (3NF: compute file_count from file_tags)
-        result = execute_single('''
+        result = db.query_single('''
             SELECT COUNT(*) as file_count
             FROM file_tags
             WHERE tag = ?
-        ''', (tag,), db_path=db_path)
+        ''', (tag,))
 
         if len(result) == 0 or result[0] == 0:
             print(f"Tag '{tag}' not found in database")
@@ -244,24 +232,24 @@ class QueryCommand(Command):
         print(f"Files: {file_count}")
 
         # Get files with this tag
-        files = execute_query('''
+        files = db.query('''
             SELECT file_path
             FROM file_tags
             WHERE tag = ?
             ORDER BY file_path
-        ''', (tag,), db_path=db_path)
+        ''', (tag,))
 
         print(f"\nFiles tagged with '{tag}':\n")
         for file_path, in files:
             print(f"- [[{file_path[:-3] if file_path.endswith('.md') else file_path}]]")
 
-    def _query_stats(self, db_path: Path) -> None:
+    def _query_stats(self, db: VaultDatabase) -> None:
         """Query database statistics."""
         print("Tag Database Statistics\n")
         print("=" * 60)
 
         # Get metadata
-        metadata_rows = execute_query('SELECT key, value FROM metadata', db_path=db_path)
+        metadata_rows = db.query('SELECT key, value FROM metadata')
         metadata = dict(metadata_rows)
 
         print(f"Generated: {metadata.get('generated', 'Unknown')}")
@@ -289,7 +277,7 @@ class QueryCommand(Command):
         # Tag distribution (3NF: compute file_count from file_tags)
         print("\nTag Distribution:")
 
-        single_use = execute_single('''
+        single_use = db.query_single('''
             SELECT COUNT(*)
             FROM (
                 SELECT tag, COUNT(*) as file_count
@@ -297,9 +285,9 @@ class QueryCommand(Command):
                 GROUP BY tag
                 HAVING file_count = 1
             )
-        ''', db_path=db_path)[0]
+        ''')[0]
 
-        low_use = execute_single('''
+        low_use = db.query_single('''
             SELECT COUNT(*)
             FROM (
                 SELECT tag, COUNT(*) as file_count
@@ -307,9 +295,9 @@ class QueryCommand(Command):
                 GROUP BY tag
                 HAVING file_count BETWEEN 2 AND 4
             )
-        ''', db_path=db_path)[0]
+        ''')[0]
 
-        medium_use = execute_single('''
+        medium_use = db.query_single('''
             SELECT COUNT(*)
             FROM (
                 SELECT tag, COUNT(*) as file_count
@@ -317,9 +305,9 @@ class QueryCommand(Command):
                 GROUP BY tag
                 HAVING file_count BETWEEN 5 AND 9
             )
-        ''', db_path=db_path)[0]
+        ''')[0]
 
-        high_use = execute_single('''
+        high_use = db.query_single('''
             SELECT COUNT(*)
             FROM (
                 SELECT tag, COUNT(*) as file_count
@@ -327,7 +315,7 @@ class QueryCommand(Command):
                 GROUP BY tag
                 HAVING file_count >= 10
             )
-        ''', db_path=db_path)[0]
+        ''')[0]
 
         print(f"  Single-use (1 file): {single_use}")
         print(f"  Low-use (2-4 files): {low_use}")

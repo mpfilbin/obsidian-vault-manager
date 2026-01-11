@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from ...core import get_vault_root
-from ...core.database import get_database_connection, get_database_path, transaction
+from ...core.database import VaultDatabase
 from ..common import is_text_file
 from ..linker import Link, LinkExtractor
 from ..scanner import FileInfo, FileScanner
@@ -54,11 +54,12 @@ class BuildCommand(Command):
         print("=" * 60)
 
         vault_root = get_vault_root()
-        db_path = get_database_path()
+        db = VaultDatabase()
+        db_path = db.db_path
 
         # Check if incremental build is requested
         if args.incremental and not args.force:
-            if not db_path.exists():
+            if not db.exists():
                 print("\nIncremental build requested but database doesn't exist.")
                 print("Performing full build instead...\n")
                 args.incremental = False
@@ -67,6 +68,7 @@ class BuildCommand(Command):
         print("\n[Phase 1/5] Scanning vault files...")
         print(f"  Vault root: {vault_root}")
         print(f"  Hash files: {'No' if args.no_hash else 'Yes'}")
+
         if not args.no_hash:
             print(f"  Max hash size: {args.max_hash_size} MB")
 
@@ -103,7 +105,7 @@ class BuildCommand(Command):
         print("\n[Phase 4/5] Populating database tables...")
 
         try:
-            with transaction(db_path) as conn:
+            with db.transaction() as conn:
                 # Populate files table
                 self._populate_files_table(conn, files)
                 print(f"  ✓ Files table: {len(files)} entries")
@@ -117,7 +119,7 @@ class BuildCommand(Command):
                 print(f"  ✓ Links table: {len(all_links)} links")
 
                 # Update metadata
-                self._populate_metadata_table(conn, files, all_links, vault_root)
+                self._populate_metadata_table(conn, files, all_links, db.vault_root)
                 print("  ✓ Metadata table: statistics recorded")
 
                 # Transaction automatically commits on successful exit
@@ -133,7 +135,9 @@ class BuildCommand(Command):
         print("\n[Phase 5/5] Optimizing database...")
 
         try:
-            with get_database_connection(db_path) as conn:
+            # VACUUM and ANALYZE must run outside a transaction
+            with db:
+                conn = db._connection
                 conn.execute("VACUUM")
                 conn.execute("ANALYZE")
             print("✓ Database optimized")
@@ -144,7 +148,7 @@ class BuildCommand(Command):
         print("\n" + "=" * 60)
         print("Build Complete!")
         print("=" * 60)
-        self._print_summary(files, all_links, db_path)
+        self._print_summary(files, all_links, db.db_path)
 
     def _extract_all_links(
         self, markdown_files: Dict[str, FileInfo], link_extractor: LinkExtractor, vault_root: Path
@@ -190,7 +194,8 @@ class BuildCommand(Command):
             db_path.unlink()
             print("  Removed existing database")
 
-        with get_database_connection(db_path) as conn:
+        with VaultDatabase(vault_root=db_path.parent) as db_temp:
+            conn = db_temp._connection
             cursor = conn.cursor()
 
             # Create tables

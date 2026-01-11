@@ -2,8 +2,8 @@
 """
 Database utilities for vault maintenance.
 
-This module provides shared utilities for database operations,
-particularly for rebuilding the vault index database.
+This module provides database operations through the VaultDatabase class.
+The class uses a context manager pattern for proper resource management.
 """
 
 import sqlite3
@@ -12,7 +12,455 @@ from argparse import Namespace
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
-from typing import List, Optional, Tuple
+from sqlite3 import Connection
+from typing import Any, Generator, List, Optional, Tuple
+
+# ============================================================================
+# VaultDatabase Class (OOP Interface)
+# ============================================================================
+
+
+class VaultDatabase:
+    """
+    Manages database operations for the vault.
+
+    Provides connection management, query execution, and transaction support.
+    Designed to be used as a context manager for proper resource cleanup.
+
+    Usage:
+        # Query operations
+        with VaultDatabase() as db:
+            results = db.query("SELECT * FROM tags")
+            single = db.query_single("SELECT COUNT(*) FROM files")
+
+        # Transaction operations
+        with VaultDatabase() as db:
+            with db.transaction() as conn:
+                conn.execute("INSERT INTO files ...")
+                conn.execute("INSERT INTO tags ...")
+                # Auto-commit on exit
+
+        # Utility operations
+        with VaultDatabase() as db:
+            db.require_exists("query")
+            stats = db.get_stats()
+    """
+
+    def __init__(self, vault_root: Optional[Path] = None):
+        """
+        Initialize database manager.
+
+        Args:
+            vault_root: Path to vault root directory. If None, uses get_vault_root()
+        """
+        self.vault_root = vault_root
+        self.db_path = self._resolve_db_path()
+        self._connection: Optional[sqlite3.Connection] = None
+
+    def _resolve_db_path(self) -> Path:
+        """
+        Resolve database path from vault root.
+
+        Returns:
+            Path to vault.db file
+        """
+        if self.vault_root is None:
+            from vault_manager.core.vault import get_vault_root
+
+            self.vault_root = get_vault_root()
+        return Path(self.vault_root) / "vault.db"
+
+    def __enter__(self) -> "VaultDatabase":
+        """
+        Enter context and open database connection.
+
+        Returns:
+            self for use in with statement
+        """
+        self._connection = self._create_connection()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit context and close database connection."""
+        if self._connection:
+            self._connection.close()
+            self._connection = None
+
+    def _create_connection(self, read_only: bool = False) -> sqlite3.Connection:
+        """
+        Create and configure database connection.
+
+        Args:
+            read_only: If True, open database in read-only mode
+
+        Returns:
+            Configured SQLite connection
+
+        Raises:
+            FileNotFoundError: If database doesn't exist (read-only mode)
+        """
+        db_path_str = str(self.db_path)
+
+        # Add read-only URI parameter if requested
+        if read_only:
+            if not self.db_path.exists():
+                raise FileNotFoundError(f"Database not found: {self.db_path}")
+            db_path_str = f"file:{self.db_path}?mode=ro"
+            conn = sqlite3.connect(db_path_str, uri=True)
+        else:
+            conn = sqlite3.connect(db_path_str)
+
+        # Apply standard configuration
+        self._configure_connection(conn)
+        return conn
+
+    @staticmethod
+    def _configure_connection(conn: sqlite3.Connection) -> None:
+        """
+        Apply standard configuration to a database connection.
+
+        Args:
+            conn: SQLite connection to configure
+        """
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    # Query Methods
+
+    def query(self, sql: str, params: Tuple = ()) -> List[Tuple]:
+        """
+        Execute SELECT query and return all results.
+
+        Args:
+            sql: SQL SELECT query
+            params: Query parameters (use ? placeholders)
+
+        Returns:
+            List of result tuples
+
+        Raises:
+            sqlite3.Error: On database or SQL errors
+            RuntimeError: If called outside context manager
+
+        Examples:
+            >> with VaultDatabase() as db:
+            ...     results = db.query("SELECT * FROM tags")
+            ...     for row in results:
+            ...         print(row)
+        """
+        if self._connection is None:
+            raise RuntimeError(
+                "Database connection not established. Use 'with VaultDatabase() as db:'"
+            )
+
+        cursor = self._connection.cursor()
+        cursor.execute(sql, params)
+        return cursor.fetchall()
+
+    def query_single(self, sql: str, params: Tuple = ()) -> Tuple:
+        """
+        Execute SELECT query and return single result or empty tuple.
+
+        Args:
+            sql: SQL SELECT query
+            params: Query parameters (use ? placeholders)
+
+        Returns:
+            Single result tuple, or empty tuple if no results
+
+        Raises:
+            sqlite3.Error: On database or SQL errors
+            RuntimeError: If called outside context manager
+
+        Examples:
+            >> with VaultDatabase() as db:
+            ...     row = db.query_single("SELECT COUNT(*) FROM files")
+            ...     count = row[0] if row else 0
+        """
+        if self._connection is None:
+            raise RuntimeError(
+                "Database connection not established. Use 'with VaultDatabase() as db:'"
+            )
+
+        cursor = self._connection.cursor()
+        cursor.execute(sql, params)
+        result = cursor.fetchone()
+        return result if result is not None else ()
+
+    def query_with_columns(self, sql: str, params: Tuple = ()) -> Tuple[List[str], List[Tuple]]:
+        """
+        Execute SELECT query and return column names and results.
+
+        Args:
+            sql: SQL SELECT query
+            params: Query parameters (use ? placeholders)
+
+        Returns:
+            Tuple of (column_names, results) where:
+            - column_names is a list of column name strings
+            - results is a list of result tuples
+
+        Raises:
+            sqlite3.Error: On database or SQL errors
+            RuntimeError: If called outside context manager
+
+        Examples:
+            >> with VaultDatabase() as db:
+            ...     columns, rows = db.query_with_columns("SELECT * FROM tags")
+            ...     print(" | ".join(columns))
+        """
+        if self._connection is None:
+            raise RuntimeError(
+                "Database connection not established. Use 'with VaultDatabase() as db:'"
+            )
+
+        cursor = self._connection.cursor()
+        cursor.execute(sql, params)
+        results = cursor.fetchall()
+        column_names = (
+            [description[0] for description in cursor.description] if cursor.description else []
+        )
+        return column_names, results
+
+    # Write Methods
+
+    def write(self, sql: str, params: Tuple = ()) -> int:
+        """
+        Execute INSERT/UPDATE/DELETE and return affected row count.
+
+        Automatically commits the transaction.
+
+        Args:
+            sql: SQL INSERT/UPDATE/DELETE query
+            params: Query parameters (use ? placeholders)
+
+        Returns:
+            Number of affected rows
+
+        Raises:
+            sqlite3.Error: On database or SQL errors
+            RuntimeError: If called outside context manager
+
+        Examples:
+            >> with VaultDatabase() as db:
+            ...     rows = db.write("INSERT INTO tags (tag) VALUES (?)", ("newtag",))
+            ...     print(f"Inserted {rows} row(s)")
+        """
+        if self._connection is None:
+            raise RuntimeError(
+                "Database connection not established. Use 'with VaultDatabase() as db:'"
+            )
+
+        cursor = self._connection.cursor()
+        cursor.execute(sql, params)
+        self._connection.commit()
+        return cursor.rowcount
+
+    def write_many(self, sql: str, param_list: List[Tuple]) -> int:
+        """
+        Execute batch INSERT/UPDATE/DELETE operations.
+
+        More efficient than multiple write() calls as it uses a single transaction.
+
+        Args:
+            sql: SQL INSERT/UPDATE/DELETE query
+            param_list: List of parameter tuples
+
+        Returns:
+            Total number of affected rows
+
+        Raises:
+            sqlite3.Error: On database or SQL errors
+            RuntimeError: If called outside context manager
+
+        Examples:
+            >> with VaultDatabase() as db:
+            ...     tags = [("tag1",), ("tag2",), ("tag3",)]
+            ...     rows = db.write_many("INSERT INTO tags (tag) VALUES (?)", tags)
+        """
+        if self._connection is None:
+            raise RuntimeError(
+                "Database connection not established. Use 'with VaultDatabase() as db:'"
+            )
+
+        cursor = self._connection.cursor()
+        cursor.executemany(sql, param_list)
+        self._connection.commit()
+        return cursor.rowcount
+
+    # Transaction Support
+
+    @contextmanager
+    def transaction(self):
+        """
+        Context manager for database transactions.
+
+        Changes are automatically committed on successful exit or rolled back
+        if an exception occurs.
+
+        Yields:
+            sqlite3.Connection in transaction context
+
+        Raises:
+            RuntimeError: If called outside VaultDatabase context manager
+
+        Examples:
+            >> with VaultDatabase() as db:
+            ...     with db.transaction() as conn:
+            ...         conn.execute("INSERT INTO tags (tag) VALUES (?)", ("newtag",))
+            ...         conn.execute("INSERT INTO file_tags (file_path, tag) VALUES (?, ?)",
+            ...                      ("note.md", "newtag"))
+            ...         # Auto-commit on success, rollback on exception
+        """
+        if self._connection is None:
+            raise RuntimeError(
+                "Database connection not established. Use 'with VaultDatabase() as db:'"
+            )
+
+        try:
+            yield self._connection
+            self._connection.commit()
+        except Exception:
+            self._connection.rollback()
+            raise
+
+    # Utility Methods
+
+    def exists(self) -> bool:
+        """
+        Check if vault.db exists.
+
+        Returns:
+            True if database exists, False otherwise
+        """
+        return self.db_path.exists()
+
+    def ensure_path(self) -> Path:
+        """
+        Ensure database parent directory exists.
+
+        Returns:
+            Path to vault.db file
+
+        Examples:
+            >> db = VaultDatabase()
+            >> db.ensure_path()  # Creates parent directory if needed
+        """
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        return self.db_path
+
+    def get_stats(self) -> dict:
+        """
+        Get statistics about the vault database.
+
+        Returns:
+            Dictionary with database statistics
+
+        Raises:
+            RuntimeError: If called outside context manager
+
+        Examples:
+            >> with VaultDatabase() as db:
+            ...     stats = db.get_stats()
+            ...     print(f"Total files: {stats['total_files']}")
+        """
+        if self._connection is None:
+            raise RuntimeError(
+                "Database connection not established. Use 'with VaultDatabase() as db:'"
+            )
+
+        try:
+            cursor = self._connection.cursor()
+            stats = {}
+
+            # Get total files
+            cursor.execute("SELECT COUNT(*) FROM files")
+            stats["total_files"] = cursor.fetchone()[0]
+
+            # Get total tags
+            cursor.execute("SELECT COUNT(DISTINCT tag) FROM file_tags")
+            stats["total_tags"] = cursor.fetchone()[0]
+
+            # Get total links
+            cursor.execute("SELECT COUNT(*) FROM links")
+            stats["total_links"] = cursor.fetchone()[0]
+
+            # Get files with frontmatter
+            cursor.execute("SELECT COUNT(*) FROM files WHERE has_frontmatter = 1")
+            stats["files_with_frontmatter"] = cursor.fetchone()[0]
+
+            # Get metadata
+            cursor.execute("SELECT key, value FROM metadata")
+            for key, value in cursor.fetchall():
+                stats[key] = value
+
+            return stats
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    def rebuild(self, silent: bool = False) -> bool:
+        """
+        Rebuild the vault index database.
+
+        Args:
+            silent: If True, suppress all output
+
+        Returns:
+            True if successful, False if failed
+
+        Examples:
+            >> db = VaultDatabase()
+            >> if db.rebuild():
+            ...     print("Database updated successfully")
+        """
+        try:
+            from vault_manager.index.commands.build import BuildCommand
+
+            if not silent:
+                print(f"\n{'=' * 60}")
+                print("Rebuilding vault index database...")
+                print(f"{'=' * 60}\n")
+
+            # Create build command with all required arguments
+            build_cmd = BuildCommand()
+            build_args = Namespace(
+                force=True,  # Force full rebuild
+                incremental=False,  # Not incremental
+                no_hash=False,  # Include hashing for duplicate detection
+                max_hash_size=100,  # Default max hash size in MB
+            )
+
+            # Execute the build
+            build_cmd.execute(build_args)
+
+            if not silent:
+                print("\nDatabase updated successfully.")
+
+            return True
+
+        except Exception as e:
+            if not silent:
+                print(f"\nWarning: Failed to rebuild database: {e}")
+                print("You may need to run 'vault index build' manually.")
+            return False
+
+    def require_exists(self, command_name: str = "this command") -> None:
+        """
+        Check if database exists and exit with helpful message if not.
+
+        Args:
+            command_name: Name of the command requiring the database (for error message)
+
+        Examples:
+            >> with VaultDatabase() as db:
+            ...     db.require_exists("query")
+            ...     # Proceeds if database exists, exits if not
+        """
+        if not self.exists():
+            print("\nError: vault.db not found.")
+            print(f"Run 'vault tags update' or 'vault index build' before using {command_name}.")
+            sys.exit(1)
+
 
 # ============================================================================
 # Database Path Utilities
@@ -91,7 +539,7 @@ def configure_connection(conn: sqlite3.Connection) -> None:
 @contextmanager
 def get_database_connection(
     db_path: Optional[Path] = None, read_only: bool = False
-) -> sqlite3.Connection:
+) -> Generator[Connection, Any, None]:
     """
     Get a database connection with automatic cleanup.
 
@@ -411,7 +859,7 @@ def execute_many(sql: str, param_list: List[Tuple], db_path: Optional[Path] = No
 # ============================================================================
 
 
-def rebuild_vault_database(silent: bool = False, verbose: bool = False) -> bool:
+def rebuild_vault_database(silent: bool = False) -> bool:
     """
     Rebuild the vault index database.
 
@@ -420,7 +868,6 @@ def rebuild_vault_database(silent: bool = False, verbose: bool = False) -> bool:
 
     Args:
         silent: If True, suppress all output
-        verbose: If True, show detailed build output (only used if not silent)
 
     Returns:
         True if successful, False if failed
@@ -593,16 +1040,13 @@ def rebuild_if_needed(
     return rebuild_vault_database(silent=silent)
 
 
-def auto_rebuild_after(operation_name: str):
+def auto_rebuild_after():
     """
     Decorator to auto-rebuild database after command execution.
 
     This decorator wraps command execute methods to automatically
     rebuild the database after the command completes, unless the
     --no-rebuild flag is set.
-
-    Args:
-        operation_name: Name of the operation (for logging/debugging)
 
     Returns:
         Decorated function that rebuilds database after execution
@@ -612,14 +1056,14 @@ def auto_rebuild_after(operation_name: str):
         >> from vault_manager.core.command import Command
         >>
         >> class PurgeCommand(Command):
-        ...     @auto_rebuild_after("tag purge")
+        ...     @auto_rebuild_after()
         ...     def execute(self, args):
         ...         # Remove tags from files
         ...         ...
         ...         # Database will be auto-rebuilt after this returns
 
         >> class RenameCommand(Command):
-        ...     @auto_rebuild_after("tag rename")
+        ...     @auto_rebuild_after()
         ...     def execute(self, args):
         ...         # Rename tags in files
         ...         ...

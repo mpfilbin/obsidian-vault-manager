@@ -12,9 +12,8 @@ from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import List, Tuple
 
+from ...core.database import VaultDatabase
 from . import Command
-from ..common import get_vault_root
-from ...core.database import get_database_path, execute_query
 
 
 class RenameCommand(Command):
@@ -24,34 +23,25 @@ class RenameCommand(Command):
     def configure_parser(parser: ArgumentParser) -> None:
         """Configure the argument parser for the rename command."""
         subparsers = parser.add_subparsers(
-            dest='subcommand',
-            required=True,
-            help='Rename sub-commands'
+            dest="subcommand", required=True, help="Rename sub-commands"
         )
 
         # Find subcommand
-        find_parser = subparsers.add_parser(
-            'find',
-            help='Find files with mangled names (preview)'
-        )
+        subparsers.add_parser("find", help="Find files with mangled names (preview)")
 
         # Apply subcommand
-        apply_parser = subparsers.add_parser(
-            'apply',
-            help='Rename files and update links'
-        )
+        apply_parser = subparsers.add_parser("apply", help="Rename files and update links")
         apply_parser.add_argument(
-            '--no-link-update',
-            action='store_true',
-            help='Skip updating links in markdown files'
+            "--no-link-update", action="store_true", help="Skip updating links in markdown files"
         )
 
     def execute(self, args: Namespace) -> None:
         """Execute the rename command."""
-        if args.subcommand == 'find':
-            self._find_mangled_names()
-        elif args.subcommand == 'apply':
-            self._apply_renames(update_links=not args.no_link_update)
+        with VaultDatabase() as db:
+            if args.subcommand == "find":
+                self._find_mangled_names(db)
+            elif args.subcommand == "apply":
+                self._apply_renames(db, update_links=not args.no_link_update)
 
     def _is_valid_filename(self, filename: str) -> Tuple[bool, str]:
         """
@@ -64,11 +54,11 @@ class RenameCommand(Command):
             Tuple of (is_valid, error_message)
         """
         # Check for empty filename
-        if not filename or filename.strip() == '':
+        if not filename or filename.strip() == "":
             return False, "Filename is empty"
 
         # Check for reserved directory names
-        if filename in {'.', '..'}:
+        if filename in {".", ".."}:
             return False, "Reserved directory name"
 
         # Forbidden characters across all platforms:
@@ -82,7 +72,7 @@ class RenameCommand(Command):
                 return False, f"Contains forbidden character: '{char}'"
 
         # Check for null character (forbidden on all platforms)
-        if '\0' in filename:
+        if "\0" in filename:
             return False, "Contains null character"
 
         # Check for control characters (ASCII 0-31)
@@ -92,20 +82,39 @@ class RenameCommand(Command):
                 return False, f"Contains control character at position {i}"
 
         # Check for trailing dots or spaces (problematic on Windows)
-        if filename.endswith('.') or filename.endswith(' '):
+        if filename.endswith(".") or filename.endswith(" "):
             return False, "Ends with dot or space (invalid on Windows)"
 
         # Check maximum filename length (255 bytes on most filesystems)
         # This is the limit for ext4 (Linux), APFS (macOS), NTFS (Windows)
-        if len(filename.encode('utf-8')) > 255:
+        if len(filename.encode("utf-8")) > 255:
             return False, f"Filename too long ({len(filename.encode('utf-8'))} bytes, max 255)"
 
         # Check for reserved names on Windows (case-insensitive)
-        name_without_ext = filename.rsplit('.', 1)[0].upper()
+        name_without_ext = filename.rsplit(".", 1)[0].upper()
         reserved_names = {
-            'CON', 'PRN', 'AUX', 'NUL',
-            'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
-            'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            "COM1",
+            "COM2",
+            "COM3",
+            "COM4",
+            "COM5",
+            "COM6",
+            "COM7",
+            "COM8",
+            "COM9",
+            "LPT1",
+            "LPT2",
+            "LPT3",
+            "LPT4",
+            "LPT5",
+            "LPT6",
+            "LPT7",
+            "LPT8",
+            "LPT9",
         }
         if name_without_ext in reserved_names:
             return False, f"Reserved name on Windows: {name_without_ext}"
@@ -124,19 +133,19 @@ class RenameCommand(Command):
             True if file should be skipped
         """
         # Skip files in Library/ directory (code, not content)
-        if file_path.startswith('Library/'):
+        if file_path.startswith("Library/"):
             return True
 
         # Skip files in _resources directories
-        if '/_resources' in file_path or file_path.startswith('_resources/'):
+        if "/_resources" in file_path or file_path.startswith("_resources/"):
             return True
 
         # Skip Python files with double underscores (Python convention)
-        if '__' in filename:
+        if "__" in filename:
             return True
 
         # Skip URL-encoded filenames (https%3A%2F%2F...)
-        if filename.startswith('http') and '%' in filename:
+        if filename.startswith("http") and "%" in filename:
             return True
 
         return False
@@ -152,31 +161,26 @@ class RenameCommand(Command):
             Cleaned filename with _ and + replaced by spaces
         """
         # Replace underscores and plus signs with spaces
-        cleaned = filename.replace('_', ' ').replace('+', ' ')
+        cleaned = filename.replace("_", " ").replace("+", " ")
 
         # Clean up multiple consecutive spaces
-        cleaned = re.sub(r' +', ' ', cleaned)
+        cleaned = re.sub(r" +", " ", cleaned)
 
         return cleaned
 
-    def _get_mangled_files(self) -> List[Tuple[str, str]]:
+    def _get_mangled_files(self, db: VaultDatabase) -> List[Tuple[str, str]]:
         """
         Get list of files with mangled names and their proposed new names.
 
         Returns:
             List of tuples: (old_path, new_path)
         """
-        db_path = get_database_path()
-        if not db_path.exists():
-            print(f"Error: Database not found at {db_path}")
-            print("Run 'vault index build' first to create the database.")
-            return []
+        db.require_exists("index rename")
 
         # Query all files from database
-        results = execute_query('SELECT file_path FROM files ORDER BY file_path', db_path=db_path)
+        results = db.query("SELECT file_path FROM files ORDER BY file_path")
         all_files = [row[0] for row in results]
 
-        vault_root = get_vault_root()
         renames = []
 
         for file_path in all_files:
@@ -198,10 +202,12 @@ class RenameCommand(Command):
                     print(f"  ⚠ Skipping {file_path}: cleaned name invalid - {error_msg}")
                     continue
 
-                new_path = str(path.parent / cleaned_name) if path.parent != Path('.') else cleaned_name
+                new_path = (
+                    str(path.parent / cleaned_name) if path.parent != Path(".") else cleaned_name
+                )
 
                 # Check if target already exists
-                target = vault_root / new_path
+                target = db.vault_root / new_path
                 if target.exists() and str(new_path) not in all_files:
                     # File exists on disk but not in database (probably in ignored dir)
                     continue
@@ -210,11 +216,11 @@ class RenameCommand(Command):
 
         return renames
 
-    def _find_mangled_names(self) -> None:
+    def _find_mangled_names(self, db: VaultDatabase) -> None:
         """Find and generate report of files with mangled names."""
         print("Finding files with mangled names...")
 
-        renames = self._get_mangled_files()
+        renames = self._get_mangled_files(db)
 
         if not renames:
             print("\nNo files with mangled names found!")
@@ -224,13 +230,12 @@ class RenameCommand(Command):
 
         # Generate report
         print("\nGenerating report...")
-        report = self._generate_report(renames)
+        report = self._generate_report(renames, db)
 
         # Write to renames.md
-        vault_root = get_vault_root()
-        output_file = vault_root / 'renames.md'
+        output_file = db.vault_root / "renames.md"
 
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(report)
 
         print(f"✓ Report written to: {output_file}")
@@ -239,7 +244,7 @@ class RenameCommand(Command):
         print("2. Check boxes next to files to rename")
         print("3. Run: vault index rename apply")
 
-    def _generate_report(self, renames: List[Tuple[str, str]]) -> str:
+    def _generate_report(self, renames: List[Tuple[str, str]], db: VaultDatabase) -> str:
         """Generate markdown report for renames."""
         from collections import defaultdict
         from datetime import datetime
@@ -247,12 +252,11 @@ class RenameCommand(Command):
         # Group by directory
         by_directory = defaultdict(list)
         for old_path, new_path in renames:
-            directory = str(Path(old_path).parent) if Path(old_path).parent != Path('.') else 'Root'
+            directory = str(Path(old_path).parent) if Path(old_path).parent != Path(".") else "Root"
             by_directory[directory].append((old_path, new_path))
 
         # Build report header
-        vault_root = get_vault_root()
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         lines = [
             "---",
@@ -265,7 +269,7 @@ class RenameCommand(Command):
             "# Mangled Filenames",
             "",
             f"**Generated:** {now}",
-            f"**Vault:** `{vault_root}`",
+            f"**Vault:** `{db.vault_root}`",
             "",
             "## Statistics",
             "",
@@ -275,7 +279,7 @@ class RenameCommand(Command):
             "## Files to Rename",
             "",
             "*Check boxes next to files you want to rename. Underscores (_) and plus signs (+) will be replaced with spaces.*",
-            ""
+            "",
         ]
 
         # Group by directory
@@ -298,25 +302,27 @@ class RenameCommand(Command):
                 lines.append("")
 
         # Add instructions
-        lines.extend([
-            "---",
-            "",
-            "## Instructions",
-            "",
-            "1. Review the proposed renames above",
-            "2. Check `[ ]` boxes next to files you want to rename",
-            "3. Run: `vault index rename apply`",
-            "4. Links in markdown files will be automatically updated",
-            "5. After renaming, run: `vault index build` to update the database",
-            "",
-            "---",
-            "",
-            "*Generated by `vault index rename find`*"
-        ])
+        lines.extend(
+            [
+                "---",
+                "",
+                "## Instructions",
+                "",
+                "1. Review the proposed renames above",
+                "2. Check `[ ]` boxes next to files you want to rename",
+                "3. Run: `vault index rename apply`",
+                "4. Links in markdown files will be automatically updated",
+                "5. After renaming, run: `vault index build` to update the database",
+                "",
+                "---",
+                "",
+                "*Generated by `vault index rename find`*",
+            ]
+        )
 
-        return '\n'.join(lines) + '\n'
+        return "\n".join(lines) + "\n"
 
-    def _apply_renames(self, update_links: bool = True) -> None:
+    def _apply_renames(self, db: VaultDatabase, update_links: bool = True) -> None:
         """
         Apply renames to files and optionally update links.
 
@@ -325,8 +331,7 @@ class RenameCommand(Command):
         """
         print("Applying renames...")
 
-        vault_root = get_vault_root()
-        report_file = vault_root / 'renames.md'
+        report_file = db.vault_root / "renames.md"
 
         if not report_file.exists():
             print(f"Error: renames.md not found at {report_file}")
@@ -334,23 +339,23 @@ class RenameCommand(Command):
             return
 
         # Parse report for checked items
-        with open(report_file, 'r', encoding='utf-8') as f:
+        with open(report_file, encoding="utf-8") as f:
             content = f.read()
 
         # Extract checked items: - [x] **`old_name`** → `new_name`
         #   - Full path: `old_path`
         # Pattern matches across newline with indentation
-        pattern = r'- \[x\] \*\*`([^`]+)`\*\* → `([^`]+)`[^\n]*\n\s+- Full path: `([^`]+)`'
+        pattern = r"- \[x\] \*\*`([^`]+)`\*\* → `([^`]+)`[^\n]*\n\s+- Full path: `([^`]+)`"
         checked_renames = []
 
         for match in re.finditer(pattern, content, re.MULTILINE):
-            old_name = match.group(1)
+            _ = match.group(1)  # old_name (not needed - we have old_path)
             new_name = match.group(2)
             old_path = match.group(3)
 
             # Construct new path
             path = Path(old_path)
-            new_path = str(path.parent / new_name) if path.parent != Path('.') else new_name
+            new_path = str(path.parent / new_name) if path.parent != Path(".") else new_name
 
             checked_renames.append((old_path, new_path))
 
@@ -368,8 +373,8 @@ class RenameCommand(Command):
         print(f"\nRenaming {len(checked_renames)} files...\n")
 
         for old_path, new_path in checked_renames:
-            source = vault_root / old_path
-            target = vault_root / new_path
+            source = db.vault_root / old_path
+            target = db.vault_root / new_path
 
             # Validate new filename
             new_filename = Path(new_path).name
@@ -405,7 +410,7 @@ class RenameCommand(Command):
         # Update links in markdown files
         if update_links and renamed_files:
             print("\nUpdating links in markdown files...")
-            self._update_links(renamed_files)
+            self._update_links(renamed_files, db)
 
         # Update report (remove renamed items)
         if renamed_files:
@@ -413,7 +418,7 @@ class RenameCommand(Command):
             renamed_old_paths = {old_path for old_path, _ in renamed_files}
 
             i = 0
-            lines = content.split('\n')
+            lines = content.split("\n")
             while i < len(lines):
                 line = lines[i]
 
@@ -423,15 +428,15 @@ class RenameCommand(Command):
                     # Skip this line and the next line (Full path)
                     i += 2
                     # Skip empty line if present
-                    if i < len(lines) and lines[i].strip() == '':
+                    if i < len(lines) and lines[i].strip() == "":
                         i += 1
                     continue
 
                 new_lines.append(line)
                 i += 1
 
-            with open(report_file, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(new_lines))
+            with open(report_file, "w", encoding="utf-8") as f:
+                f.write("\n".join(new_lines))
 
         # Print summary
         print("\n" + "=" * 80)
@@ -455,12 +460,13 @@ class RenameCommand(Command):
             print("\nReport updated: renames.md")
             print("\n⚠ Important: Run 'vault index build' to update the database.")
 
-    def _update_links(self, renames: List[Tuple[str, str]]) -> None:
+    def _update_links(self, renames: List[Tuple[str, str]], db: VaultDatabase) -> None:
         """
         Update links in markdown files to reflect renamed files.
 
         Args:
             renames: List of (old_path, new_path) tuples
+            db: VaultDatabase instance
         """
         # Create mapping of old filename -> new filename (just the name, not full path)
         name_map = {}
@@ -469,23 +475,21 @@ class RenameCommand(Command):
             new_name = Path(new_path).name
             name_map[old_name] = new_name
 
-        vault_root = get_vault_root()
         updated_files = []
 
         # Get all markdown files
-        db_path = get_database_path()
-        results = execute_query("SELECT file_path FROM files WHERE file_path LIKE '%.md'", db_path=db_path)
+        results = db.query("SELECT file_path FROM files WHERE file_path LIKE '%.md'")
         md_files = [row[0] for row in results]
 
         # Update links in each markdown file
         for md_path in md_files:
-            file_path = vault_root / md_path
+            file_path = db.vault_root / md_path
 
             if not file_path.exists():
                 continue
 
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, encoding="utf-8") as f:
                     content = f.read()
 
                 original_content = content
@@ -498,21 +502,21 @@ class RenameCommand(Command):
 
                     # Replace wiki-links: [[old_name]] and [[old_name|alias]]
                     content = re.sub(
-                        rf'\[\[{escaped_old}(\|[^\]]+)?\]\]',
-                        lambda m: f'[[{new_name}{m.group(1) if m.group(1) else ""}]]',
-                        content
+                        rf"\[\[{escaped_old}(\|[^]]+)?]]" ,
+                        lambda m: f"[[{new_name}{m.group(1) if m.group(1) else ''}]]",
+                        content,
                     )
 
-                    # Replace image embeds: ![[old_name]] and ![[old_name|alias]]
+                    # Replace image embeds:  and ![[old_name|alias]]
                     content = re.sub(
-                        rf'!\[\[{escaped_old}(\|[^\]]+)?\]\]',
-                        lambda m: f'![[{new_name}{m.group(1) if m.group(1) else ""}]]',
-                        content
+                        rf"!\[\[{escaped_old}(\|[^]]+)?]]" ,
+                        lambda m: f"![[{new_name}{m.group(1) if m.group(1) else ''}]]",
+                        content,
                     )
 
                 # Write back if changed
                 if content != original_content:
-                    with open(file_path, 'w', encoding='utf-8') as f:
+                    with open(file_path, "w", encoding="utf-8") as f:
                         f.write(content)
                     updated_files.append(md_path)
                     print(f"  ✓ Updated links in: {md_path}")
