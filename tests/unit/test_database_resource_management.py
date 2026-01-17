@@ -172,6 +172,7 @@ class TestErrorRecovery:
         try:
             execute_query("INVALID SQL", db_path=db_path)
         except sqlite3.OperationalError:
+            """This is expected"""
             pass
 
         # Should be able to open new connection successfully
@@ -219,7 +220,7 @@ class TestConcurrentConnections:
             # First connection should still work
             cursor = conn1.cursor()
             cursor.execute("SELECT COUNT(*) FROM test")
-            count = cursor.fetchone()[0]
+            assert cursor.fetchone()[0] == 1
 
         # Both connections should be closed now
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
