@@ -7,15 +7,15 @@ identical content (via SHA-256 hashing) and provides cleanup functionality.
 
 import re
 import shutil
-import sqlite3
 from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
+from ...core.database import VaultDatabase
+from ..common import format_file_size, get_file_extension_category
 from . import Command
-from ..common import get_vault_root, get_database_path, format_file_size, get_file_extension_category
 
 
 class DuplicatesCommand(Command):
@@ -25,46 +25,31 @@ class DuplicatesCommand(Command):
     def configure_parser(parser: ArgumentParser) -> None:
         """Configure the argument parser for the duplicates command."""
         subparsers = parser.add_subparsers(
-            dest='subcommand',
-            required=True,
-            help='Duplicates sub-commands'
+            dest="subcommand", required=True, help="Duplicates sub-commands"
         )
 
         # Find subcommand
-        find_parser = subparsers.add_parser(
-            'find',
-            help='Find duplicate files and generate report'
-        )
+        subparsers.add_parser("find", help="Find duplicate files and generate report")
 
         # Cleanup subcommand
-        cleanup_parser = subparsers.add_parser(
-            'cleanup',
-            help='Move checked duplicates to .trash'
-        )
+        subparsers.add_parser("cleanup", help="Move checked duplicates to .trash")
 
     def execute(self, args: Namespace) -> None:
         """Execute the duplicates command."""
-        if args.subcommand == 'find':
-            self._find_duplicates()
-        elif args.subcommand == 'cleanup':
-            self._cleanup_duplicates()
+        with VaultDatabase() as db:
+            if args.subcommand == "find":
+                self._find_duplicates(db)
+            elif args.subcommand == "cleanup":
+                self._cleanup_duplicates(db)
 
-    def _find_duplicates(self) -> None:
+    def _find_duplicates(self, db: VaultDatabase) -> None:
         """Find and report duplicate files."""
         print("Finding duplicate files...")
 
-        db_path = get_database_path()
-        if not db_path.exists():
-            print(f"Error: Database not found at {db_path}")
-            print("Run 'vault index build' first to create the database.")
-            return
+        db.require_exists("index duplicates find")
 
-        # Query duplicate groups from database
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Get duplicate groups with file details (3NF: compute extension from path)
-        cursor.execute('''
+        # Query duplicate groups from database using centralized utility
+        rows = db.query("""
             SELECT f.content_hash, f.file_path, f.size_bytes
             FROM files f
             WHERE f.content_hash IN (
@@ -75,10 +60,7 @@ class DuplicatesCommand(Command):
                 HAVING COUNT(*) > 1
             )
             ORDER BY f.content_hash, f.file_path
-        ''')
-
-        rows = cursor.fetchall()
-        conn.close()
+        """)
 
         if not rows:
             print("\nNo duplicate files found!")
@@ -90,24 +72,19 @@ class DuplicatesCommand(Command):
         duplicate_groups = defaultdict(list)
         for hash_val, path, size in rows:
             ext = Path(path).suffix  # Compute extension from path
-            duplicate_groups[hash_val].append({
-                'path': path,
-                'size': size,
-                'ext': ext
-            })
+            duplicate_groups[hash_val].append({"path": path, "size": size, "ext": ext})
 
         print(f"Found {len(duplicate_groups)} duplicate groups")
         print(f"Total files affected: {sum(len(files) for files in duplicate_groups.values())}")
 
         # Generate report
         print("\nGenerating report...")
-        report = self._generate_report(duplicate_groups)
+        report = self._generate_report(duplicate_groups, db)
 
         # Write to duplicates.md
-        vault_root = get_vault_root()
-        output_file = vault_root / 'duplicates.md'
+        output_file = db.vault_root / "duplicates.md"
 
-        with open(output_file, 'w', encoding='utf-8') as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(report)
 
         print(f"✓ Report written to: {output_file}")
@@ -116,39 +93,33 @@ class DuplicatesCommand(Command):
         print("2. Check boxes next to files to remove")
         print("3. Run: vault index duplicates cleanup")
 
-    def _get_reference_counts(self) -> Dict[str, int]:
+    def _get_reference_counts(self, db: VaultDatabase) -> Dict[str, int]:
         """Get incoming reference counts for all files from links table."""
-        db_path = get_database_path()
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Count incoming links for each file
-        cursor.execute('''
+        # Count incoming links for each file using centralized utility
+        rows = db.query("""
             SELECT target_file, COUNT(*) as ref_count
             FROM links
             WHERE target_file IS NOT NULL
             GROUP BY target_file
-        ''')
+        """)
 
-        ref_counts = {row[0]: row[1] for row in cursor.fetchall()}
-        conn.close()
+        ref_counts = {row[0]: row[1] for row in rows}
         return ref_counts
 
-    def _generate_report(self, duplicate_groups: Dict) -> str:
+    def _generate_report(self, duplicate_groups: Dict, db: VaultDatabase) -> str:
         """Generate markdown report grouped by file type."""
         # Get reference counts for all files
-        ref_counts = self._get_reference_counts()
+        ref_counts = self._get_reference_counts(db)
 
         # Group duplicates by extension
         by_extension = defaultdict(list)
 
         for hash_val, files in duplicate_groups.items():
-            ext = files[0]['ext']
+            ext = files[0]["ext"]
             by_extension[ext].append((hash_val, files))
 
         # Build report header
-        vault_root = get_vault_root()
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         lines = [
             "---",
@@ -161,30 +132,32 @@ class DuplicatesCommand(Command):
             "# Duplicate Files",
             "",
             f"**Generated:** {now}",
-            f"**Vault:** `{vault_root}`",
+            f"**Vault:** `{db.vault_root}`",
             "",
             "## Statistics",
-            ""
+            "",
         ]
 
         # Calculate statistics
         total_groups = len(duplicate_groups)
         total_files = sum(len(files) for files in duplicate_groups.values())
-        total_size = sum(f['size'] for files in duplicate_groups.values() for f in files)
+        total_size = sum(f["size"] for files in duplicate_groups.values() for f in files)
         waste_size = sum(
-            sum(f['size'] for f in files[1:])  # All except first (which we keep)
+            sum(f["size"] for f in files[1:])  # All except first (which we keep)
             for files in duplicate_groups.values()
         )
 
-        lines.extend([
-            f"- Duplicate groups: {total_groups}",
-            f"- Files affected: {total_files}",
-            f"- Total size: {format_file_size(total_size)}",
-            f"- Space to reclaim: {format_file_size(waste_size)}",
-            "",
-            "## Duplicate Groups",
-            ""
-        ])
+        lines.extend(
+            [
+                f"- Duplicate groups: {total_groups}",
+                f"- Files affected: {total_files}",
+                f"- Total size: {format_file_size(total_size)}",
+                f"- Space to reclaim: {format_file_size(waste_size)}",
+                "",
+                "## Duplicate Groups",
+                "",
+            ]
+        )
 
         # Group by extension
         for ext in sorted(by_extension.keys()):
@@ -194,52 +167,65 @@ class DuplicatesCommand(Command):
 
             for hash_val, files in by_extension[ext]:
                 # Show truncated hash
-                short_hash = hash_val[:12] if hash_val else 'unknown'
-                size_str = format_file_size(files[0]['size'])
+                short_hash = hash_val[:12] if hash_val else "unknown"
+                size_str = format_file_size(files[0]["size"])
 
-                lines.append(f"**Group** ({len(files)} copies, {size_str} each) - `{short_hash}...`")
+                lines.append(
+                    f"**Group** ({len(files)} copies, {size_str} each) - `{short_hash}...`"
+                )
                 lines.append("")
-                lines.append("*First file is recommended to keep. Check boxes to mark files for deletion:*")
+                lines.append(
+                    "*First file is recommended to keep. Check boxes to mark files for deletion:*"
+                )
                 lines.append("")
 
                 # First file: keep (no checkbox)
-                first_refs = ref_counts.get(files[0]['path'], 0)
-                ref_text = f" - **Referenced by {first_refs} file(s)**" if first_refs > 0 else " - Not referenced"
+                first_refs = ref_counts.get(files[0]["path"], 0)
+                ref_text = (
+                    f" - **Referenced by {first_refs} file(s)**"
+                    if first_refs > 0
+                    else " - Not referenced"
+                )
                 lines.append(f"- **KEEP:** [[{files[0]['path']}]]{ref_text}")
 
                 # Remaining files: checkboxes for removal
                 for file_info in files[1:]:
-                    file_refs = ref_counts.get(file_info['path'], 0)
-                    ref_text = f" - Referenced by {file_refs} file(s)" if file_refs > 0 else " - Not referenced"
+                    file_refs = ref_counts.get(file_info["path"], 0)
+                    ref_text = (
+                        f" - Referenced by {file_refs} file(s)"
+                        if file_refs > 0
+                        else " - Not referenced"
+                    )
                     lines.append(f"- [ ] [[{file_info['path']}]]{ref_text}")
 
                 lines.append("")
 
         # Add instructions
-        lines.extend([
-            "---",
-            "",
-            "## Instructions",
-            "",
-            "1. Review each duplicate group above",
-            "2. Check `[ ]` boxes next to files you want to **REMOVE**",
-            "3. The first file in each group is marked **KEEP** (recommended)",
-            "4. Run: `vault index duplicates cleanup`",
-            "5. Checked files will be moved to `.trash`",
-            "",
-            "---",
-            "",
-            "*Generated by `vault index duplicates find`*"
-        ])
+        lines.extend(
+            [
+                "---",
+                "",
+                "## Instructions",
+                "",
+                "1. Review each duplicate group above",
+                "2. Check `[ ]` boxes next to files you want to **REMOVE**",
+                "3. The first file in each group is marked **KEEP** (recommended)",
+                "4. Run: `vault index duplicates cleanup`",
+                "5. Checked files will be moved to `.trash`",
+                "",
+                "---",
+                "",
+                "*Generated by `vault index duplicates find`*",
+            ]
+        )
 
-        return '\n'.join(lines) + '\n'
+        return "\n".join(lines) + "\n"
 
-    def _cleanup_duplicates(self) -> None:
+    def _cleanup_duplicates(self, db: VaultDatabase) -> None:
         """Move checked duplicates to .trash."""
         print("Cleaning up duplicates...")
 
-        vault_root = get_vault_root()
-        report_file = vault_root / 'duplicates.md'
+        report_file = db.vault_root / "duplicates.md"
 
         if not report_file.exists():
             print(f"Error: duplicates.md not found at {report_file}")
@@ -247,14 +233,14 @@ class DuplicatesCommand(Command):
             return
 
         # Parse report for checked items
-        with open(report_file, 'r', encoding='utf-8') as f:
+        with open(report_file, encoding="utf-8") as f:
             content = f.read()
 
         # Extract checked items: - [x] [[path]]
-        pattern = r'^\s*- \[x\] \[\[([^\]]+)\]\]'
+        pattern = r"^\s*- \[x\] \[\[([^\]]+)\]\]"
         checked_files = []
 
-        for line in content.split('\n'):
+        for line in content.split("\n"):
             match = re.match(pattern, line)
             if match:
                 checked_files.append(match.group(1))
@@ -267,7 +253,7 @@ class DuplicatesCommand(Command):
         print(f"Found {len(checked_files)} files marked for removal")
 
         # Create .trash directory
-        trash_dir = vault_root / '.trash'
+        trash_dir = db.vault_root / ".trash"
         trash_dir.mkdir(exist_ok=True)
 
         # Move files
@@ -275,7 +261,7 @@ class DuplicatesCommand(Command):
         failed_files = []
 
         for file_path in checked_files:
-            source = vault_root / file_path
+            source = db.vault_root / file_path
 
             if not source.exists():
                 print(f"  Warning: File not found: {file_path}")
@@ -298,15 +284,15 @@ class DuplicatesCommand(Command):
         # Update report (remove moved items)
         if moved_files:
             new_lines = []
-            for line in content.split('\n'):
+            for line in content.split("\n"):
                 # Skip checked lines that were successfully moved
                 match = re.match(pattern, line)
                 if match and match.group(1) in moved_files:
                     continue
                 new_lines.append(line)
 
-            with open(report_file, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(new_lines))
+            with open(report_file, "w", encoding="utf-8") as f:
+                f.write("\n".join(new_lines))
 
         # Print summary
         print("\n" + "=" * 60)

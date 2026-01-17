@@ -10,14 +10,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .common import (
-    get_vault_root,
-    is_ignored_path,
-    is_ignored_file,
-    compute_file_hash,
-    format_timestamp
-)
 from vault_manager.core.frontmatter_manager import FrontmatterManager
+
+from ..core import get_vault_root
+from .common import (
+    compute_file_hash,
+    format_timestamp,
+    is_ignored_file,
+    is_ignored_path,
+)
 
 
 @dataclass
@@ -39,6 +40,7 @@ class FileInfo:
         tag_count can be derived from: len(tags)
         These follow 3NF - no derived attributes stored.
     """
+
     file_path: str
     size_bytes: int
     content_hash: Optional[str]
@@ -62,7 +64,12 @@ class FileScanner:
     - Tags from frontmatter (markdown files only)
     """
 
-    def __init__(self, vault_root: Optional[Path] = None, hash_files: bool = True, max_hash_size_mb: int = 100):
+    def __init__(
+        self,
+        vault_root: Optional[Path] = None,
+        hash_files: bool = True,
+        max_hash_size_mb: int = 100,
+    ):
         """
         Initialize the file scanner.
 
@@ -139,7 +146,7 @@ class FileScanner:
             # Extract basic metadata
             size_bytes = stat.st_size
             last_modified = format_timestamp(stat.st_mtime)
-            created = format_timestamp(stat.st_ctime) if hasattr(stat, 'st_birthtime') else None
+            created = format_timestamp(stat.st_ctime) if hasattr(stat, "st_birthtime") else None
 
             # Compute content hash if enabled
             content_hash = None
@@ -152,11 +159,11 @@ class FileScanner:
                 size_bytes=size_bytes,
                 content_hash=content_hash,
                 last_modified=last_modified,
-                created=created
+                created=created,
             )
 
             # Extract tags from markdown files (compute extension from file_path)
-            if relative_path.endswith('.md'):
+            if relative_path.endswith(".md"):
                 self._extract_markdown_metadata(file_path, file_info)
 
             return file_info
@@ -177,23 +184,23 @@ class FileScanner:
             Modifies file_info in-place
         """
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding="utf-8") as f:
                 content = f.read()
 
             # Check for frontmatter
-            if content.startswith('---'):
+            if content.startswith("---"):
                 file_info.has_frontmatter = True
                 tags = FrontmatterManager.extract_tags_from_frontmatter(content)
                 if tags:
                     file_info.tags = tags
 
-        except (OSError, UnicodeDecodeError) as e:
+        except (OSError, UnicodeDecodeError):
             # Try with fallback encoding
             try:
-                with open(file_path, 'r', encoding='latin-1', errors='replace') as f:
+                with open(file_path, encoding="latin-1", errors="replace") as f:
                     content = f.read()
 
-                if content.startswith('---'):
+                if content.startswith("---"):
                     file_info.has_frontmatter = True
                     tags = FrontmatterManager.extract_tags_from_frontmatter(content)
                     if tags:

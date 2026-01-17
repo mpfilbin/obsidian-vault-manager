@@ -6,7 +6,6 @@ This command analyzes all tags in the vault and identifies pairs of similar tags
 that could indicate typos, plurals, or opportunities for consolidation.
 """
 
-import sqlite3
 import sys
 from argparse import ArgumentParser, Namespace
 from difflib import SequenceMatcher
@@ -14,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from vault_manager.core.command import Command
-from vault_manager.core.vault import get_vault_root
+from vault_manager.core.database import VaultDatabase
 
 
 class SimilarCommand(Command):
@@ -45,8 +44,6 @@ class SimilarCommand(Command):
 
     def execute(self, args: Namespace) -> None:
         """Execute the similar command to find similar tags."""
-        vault_root = get_vault_root()
-        db_path = vault_root / 'vault.db'
         threshold = args.threshold
         min_count = args.min_count
         output_file = args.output
@@ -56,74 +53,67 @@ class SimilarCommand(Command):
             print("Error: Threshold must be between 0.0 and 1.0")
             sys.exit(1)
 
-        # Check if database exists
-        if not db_path.exists():
-            print("Error: vault.db not found. Run 'vault tags update' first.")
-            sys.exit(1)
+        with VaultDatabase() as db:
+            # Check if database exists
+            db.require_exists("tags similar")
 
-        print(f"\n{'='*60}")
-        print(f"Tag Similarity Finder")
-        print(f"{'='*60}")
-        print(f"Vault: {vault_root}")
-        print(f"Similarity threshold: {threshold}")
-        print(f"Minimum tag count: {min_count}")
-        print(f"{'='*60}\n")
+            print(f"\n{'='*60}")
+            print("Tag Similarity Finder")
+            print(f"{'='*60}")
+            print(f"Vault: {db.vault_root}")
+            print(f"Similarity threshold: {threshold}")
+            print(f"Minimum tag count: {min_count}")
+            print(f"{'='*60}\n")
 
-        # Load tags from database
-        print("Loading tags from database...")
-        tags_data = self._load_tags(db_path, min_count)
+            # Load tags from database
+            print("Loading tags from database...")
+            tags_data = self._load_tags(db, min_count)
 
-        if len(tags_data) < 2:
-            print(f"\nNot enough tags to compare (found {len(tags_data)}).")
-            print("Try lowering --min-count or run 'vault tags update' to refresh the database.")
-            return
+            if len(tags_data) < 2:
+                print(f"\nNot enough tags to compare (found {len(tags_data)}).")
+                print("Try lowering --min-count or run 'vault tags update' to refresh the database.")
+                return
 
-        print(f"Analyzing {len(tags_data)} tags...\n")
+            print(f"Analyzing {len(tags_data)} tags...\n")
 
-        # Find similar pairs
-        similar_pairs = self._find_similar_pairs(tags_data, threshold)
+            # Find similar pairs
+            similar_pairs = self._find_similar_pairs(tags_data, threshold)
 
-        if not similar_pairs:
-            print(f"No similar tags found above threshold {threshold}.")
-            print("Try lowering the threshold with --threshold 0.7")
-            return
+            if not similar_pairs:
+                print(f"No similar tags found above threshold {threshold}.")
+                print("Try lowering the threshold with --threshold 0.7")
+                return
 
-        # Categorize and display results
-        categorized = self._categorize_pairs(similar_pairs, tags_data)
-        self._display_results(categorized, tags_data)
+            # Categorize and display results
+            categorized = self._categorize_pairs(similar_pairs, tags_data)
+            self._display_results(categorized, tags_data)
 
-        # Generate report if requested
-        if output_file:
-            report_path = vault_root / output_file
-            self._generate_report(report_path, categorized, tags_data, threshold, min_count)
-            print(f"\n✓ Report saved to: {report_path.name}")
+            # Generate report if requested
+            if output_file:
+                report_path = db.vault_root / output_file
+                self._generate_report(report_path, categorized, tags_data, threshold, min_count)
+                print(f"\n✓ Report saved to: {report_path.name}")
 
-    def _load_tags(self, db_path: Path, min_count: int) -> Dict[str, int]:
+    def _load_tags(self, db: VaultDatabase, min_count: int) -> Dict[str, int]:
         """
         Load tags and their counts from the database.
 
         Args:
-            db_path: Path to vault.db
+            db: VaultDatabase instance
             min_count: Minimum usage count to include
 
         Returns:
             Dictionary mapping tag name to count
         """
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
+        results = db.query("""
+            SELECT tag, COUNT(*) as count
+            FROM file_tags
+            GROUP BY tag
+            HAVING count >= ?
+            ORDER BY tag
+        """, (min_count,))
 
-            # Query tags with counts
-            cursor.execute("""
-                SELECT tag, COUNT(*) as count
-                FROM file_tags
-                GROUP BY tag
-                HAVING count >= ?
-                ORDER BY tag
-            """, (min_count,))
-
-            tags_data = {tag: count for tag, count in cursor.fetchall()}
-
-        return tags_data
+        return {tag: count for tag, count in results}
 
     def _find_similar_pairs(
         self,
@@ -308,7 +298,7 @@ class SimilarCommand(Command):
                 print()
 
         print(f"{'='*60}")
-        print(f"\nTip: Review suggestions and use 'vault tags rename --dry-run' to preview changes")
+        print("\nTip: Review suggestions and use 'vault tags rename --dry-run' to preview changes")
 
     def _generate_report(
         self,

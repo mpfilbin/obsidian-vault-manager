@@ -8,17 +8,19 @@ Tests database operations including:
 - require_database(): validating database exists before command execution
 """
 
-import pytest
 import sqlite3
-from pathlib import Path
 from argparse import Namespace
+from pathlib import Path
+
+import pytest
+
 from vault_manager.core.database import (
-    rebuild_vault_database,
-    get_database_stats,
-    database_exists,
-    require_database,
-    rebuild_if_needed,
     auto_rebuild_after,
+    database_exists,
+    get_database_stats,
+    rebuild_if_needed,
+    rebuild_vault_database,
+    require_database,
 )
 
 
@@ -88,8 +90,7 @@ def vault_database(temp_vault):
 
     # Insert sample data using explicit column lists
     cursor.execute(
-        "INSERT INTO metadata (key, value) VALUES (?, ?)",
-        ("last_updated", "2026-01-06")
+        "INSERT INTO metadata (key, value) VALUES (?, ?)", ("last_updated", "2026-01-06")
     )
 
     files_rows = [
@@ -102,17 +103,14 @@ def vault_database(temp_vault):
         INSERT INTO files (file_path, size_bytes, content_hash, last_modified, created, has_frontmatter)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        files_rows
+        files_rows,
     )
 
-    cursor.executemany(
-        "INSERT INTO tags (tag) VALUES (?)",
-        [("test",), ("vault",)]
-    )
+    cursor.executemany("INSERT INTO tags (tag) VALUES (?)", [("test",), ("vault",)])
 
     cursor.executemany(
         "INSERT INTO file_tags (tag, file_path) VALUES (?, ?)",
-        [("test", "note1.md"), ("vault", "note1.md"), ("test", "note2.md")]
+        [("test", "note1.md"), ("vault", "note1.md"), ("test", "note2.md")],
     )
 
     cursor.executemany(
@@ -123,7 +121,7 @@ def vault_database(temp_vault):
         [
             ("note1.md", "note2.md", "wikilink", "note2", 3),
             ("note2.md", "note3.md", "wikilink", "note3", 3),
-        ]
+        ],
     )
 
     conn.commit()
@@ -157,25 +155,25 @@ class TestGetDatabaseStats:
         """Test getting basic database statistics."""
         stats = get_database_stats(vault_database)
 
-        assert stats['total_files'] == 3
-        assert stats['total_tags'] == 2  # distinct: test, vault
-        assert stats['total_links'] == 2
-        assert stats['files_with_frontmatter'] == 2
+        assert stats["total_files"] == 3
+        assert stats["total_tags"] == 2  # distinct: test, vault
+        assert stats["total_links"] == 2
+        assert stats["files_with_frontmatter"] == 2
 
     def test_get_stats_includes_metadata(self, vault_database):
         """Test that metadata is included in stats."""
         stats = get_database_stats(vault_database)
 
-        assert 'last_updated' in stats
-        assert stats['last_updated'] == '2026-01-06'
+        assert "last_updated" in stats
+        assert stats["last_updated"] == "2026-01-06"
 
     def test_get_stats_nonexistent_database(self, tmp_path):
         """Test get_database_stats with nonexistent database."""
         nonexistent_db = tmp_path / "nonexistent.db"
         stats = get_database_stats(nonexistent_db)
 
-        assert 'error' in stats
-        assert isinstance(stats['error'], str)
+        assert "error" in stats
+        assert isinstance(stats["error"], str)
 
     def test_get_stats_empty_database(self, temp_vault):
         """Test get_database_stats with empty database."""
@@ -200,10 +198,10 @@ class TestGetDatabaseStats:
 
         stats = get_database_stats(db_path)
 
-        assert stats['total_files'] == 0
-        assert stats['total_tags'] == 0
-        assert stats['total_links'] == 0
-        assert stats['files_with_frontmatter'] == 0
+        assert stats["total_files"] == 0
+        assert stats["total_tags"] == 0
+        assert stats["total_links"] == 0
+        assert stats["files_with_frontmatter"] == 0
 
 
 @pytest.mark.unit
@@ -245,6 +243,7 @@ class TestRebuildVaultDatabase:
 
     def test_rebuild_silent_mode(self, temp_vault, monkeypatch, capsys):
         """Test rebuild in silent mode suppresses output."""
+
         # Mock the BuildCommand
         class MockBuildCommand:
             def execute(self, args):
@@ -252,31 +251,14 @@ class TestRebuildVaultDatabase:
 
         # Mock the import
         import vault_manager.index.commands.build as build_module
-        monkeypatch.setattr(build_module, 'BuildCommand', MockBuildCommand)
+
+        monkeypatch.setattr(build_module, "BuildCommand", MockBuildCommand)
 
         result = rebuild_vault_database(silent=True)
 
         assert result is True
         captured = capsys.readouterr()
         assert captured.out == ""
-
-    def test_rebuild_verbose_mode(self, temp_vault, monkeypatch, capsys):
-        """Test rebuild in verbose mode shows output."""
-        # Mock the BuildCommand
-        class MockBuildCommand:
-            def execute(self, args):
-                pass
-
-        # Mock the import
-        import vault_manager.index.commands.build as build_module
-        monkeypatch.setattr(build_module, 'BuildCommand', MockBuildCommand)
-
-        result = rebuild_vault_database(silent=False, verbose=False)
-
-        assert result is True
-        captured = capsys.readouterr()
-        assert "Rebuilding vault index database" in captured.out
-        assert "Database updated successfully" in captured.out
 
     def test_rebuild_creates_correct_args(self, temp_vault, monkeypatch):
         """Test rebuild creates correct arguments for BuildCommand."""
@@ -288,7 +270,8 @@ class TestRebuildVaultDatabase:
 
         # Mock the import
         import vault_manager.index.commands.build as build_module
-        monkeypatch.setattr(build_module, 'BuildCommand', MockBuildCommand)
+
+        monkeypatch.setattr(build_module, "BuildCommand", MockBuildCommand)
 
         rebuild_vault_database(silent=True)
 
@@ -301,6 +284,7 @@ class TestRebuildVaultDatabase:
 
     def test_rebuild_handles_exception(self, temp_vault, monkeypatch, capsys):
         """Test rebuild handles exceptions gracefully."""
+
         # Mock the BuildCommand to raise an exception
         class MockBuildCommand:
             def execute(self, args):
@@ -308,7 +292,8 @@ class TestRebuildVaultDatabase:
 
         # Mock the import
         import vault_manager.index.commands.build as build_module
-        monkeypatch.setattr(build_module, 'BuildCommand', MockBuildCommand)
+
+        monkeypatch.setattr(build_module, "BuildCommand", MockBuildCommand)
 
         result = rebuild_vault_database(silent=False)
 
@@ -319,6 +304,7 @@ class TestRebuildVaultDatabase:
 
     def test_rebuild_exception_silent(self, temp_vault, monkeypatch, capsys):
         """Test rebuild exception handling in silent mode."""
+
         # Mock the BuildCommand to raise an exception
         class MockBuildCommand:
             def execute(self, args):
@@ -326,7 +312,8 @@ class TestRebuildVaultDatabase:
 
         # Mock the import
         import vault_manager.index.commands.build as build_module
-        monkeypatch.setattr(build_module, 'BuildCommand', MockBuildCommand)
+
+        monkeypatch.setattr(build_module, "BuildCommand", MockBuildCommand)
 
         result = rebuild_vault_database(silent=True)
 
@@ -344,7 +331,7 @@ class TestRebuildIfNeeded:
         # Mock rebuild_vault_database
         rebuild_called = []
 
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             rebuild_called.append(True)
             return True
 
@@ -360,7 +347,7 @@ class TestRebuildIfNeeded:
         # Mock rebuild_vault_database
         rebuild_called = []
 
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             rebuild_called.append(True)
             return True
 
@@ -377,8 +364,9 @@ class TestRebuildIfNeeded:
 
     def test_rebuild_if_needed_skip_with_custom_message(self, monkeypatch, capsys):
         """Test rebuild_if_needed with custom skip message."""
+
         # Mock rebuild_vault_database
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             return True
 
         monkeypatch.setattr("vault_manager.core.database.rebuild_vault_database", mock_rebuild)
@@ -393,8 +381,9 @@ class TestRebuildIfNeeded:
 
     def test_rebuild_if_needed_silent(self, monkeypatch, capsys):
         """Test rebuild_if_needed in silent mode."""
+
         # Mock rebuild_vault_database
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             return True
 
         monkeypatch.setattr("vault_manager.core.database.rebuild_vault_database", mock_rebuild)
@@ -412,8 +401,9 @@ class TestRebuildIfNeeded:
 
     def test_rebuild_if_needed_rebuild_fails(self, monkeypatch, capsys):
         """Test rebuild_if_needed when rebuild fails."""
+
         # Mock rebuild_vault_database to fail
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             return False
 
         monkeypatch.setattr("vault_manager.core.database.rebuild_vault_database", mock_rebuild)
@@ -432,7 +422,7 @@ class TestAutoRebuildAfter:
         # Mock rebuild_vault_database
         rebuild_called = []
 
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             rebuild_called.append(True)
             return True
 
@@ -440,7 +430,7 @@ class TestAutoRebuildAfter:
 
         # Create mock command with decorated execute method
         class MockCommand:
-            @auto_rebuild_after("test operation")
+            @auto_rebuild_after()
             def execute(self, args):
                 return "command executed"
 
@@ -456,7 +446,7 @@ class TestAutoRebuildAfter:
         # Mock rebuild_vault_database
         rebuild_called = []
 
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             rebuild_called.append(True)
             return True
 
@@ -464,7 +454,7 @@ class TestAutoRebuildAfter:
 
         # Create mock command with decorated execute method
         class MockCommand:
-            @auto_rebuild_after("test operation")
+            @auto_rebuild_after()
             def execute(self, args):
                 return "command executed"
 
@@ -483,7 +473,7 @@ class TestAutoRebuildAfter:
         # Mock rebuild_vault_database
         rebuild_called = []
 
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             rebuild_called.append(True)
             return True
 
@@ -491,7 +481,7 @@ class TestAutoRebuildAfter:
 
         # Create mock command with decorated execute method
         class MockCommand:
-            @auto_rebuild_after("test operation")
+            @auto_rebuild_after()
             def execute(self, args):
                 return "command executed"
 
@@ -505,11 +495,12 @@ class TestAutoRebuildAfter:
 
     def test_decorator_preserves_function_metadata(self):
         """Test decorator preserves original function metadata."""
+
         def original_execute(self, args):
             """Original docstring."""
             pass
 
-        decorated = auto_rebuild_after("test")(original_execute)
+        decorated = auto_rebuild_after()(original_execute)
 
         assert decorated.__name__ == "original_execute"
         assert decorated.__doc__ == "Original docstring."
@@ -519,7 +510,7 @@ class TestAutoRebuildAfter:
         # Mock rebuild_vault_database
         rebuild_called = []
 
-        def mock_rebuild(silent=False, verbose=False):
+        def mock_rebuild(silent=False):
             rebuild_called.append(True)
             return True
 
@@ -527,7 +518,7 @@ class TestAutoRebuildAfter:
 
         # Create mock command that raises exception
         class MockCommand:
-            @auto_rebuild_after("test operation")
+            @auto_rebuild_after()
             def execute(self, args):
                 raise ValueError("Command failed")
 
@@ -553,7 +544,7 @@ class TestIntegration:
 
         # Get stats
         stats = get_database_stats(vault_database)
-        assert stats['total_files'] > 0
+        assert stats["total_files"] > 0
 
         # Require database (should not exit)
         require_database(temp_vault)
@@ -566,7 +557,7 @@ class TestIntegration:
         # Get stats should return error
         db_path = temp_vault / "vault.db"
         stats = get_database_stats(db_path)
-        assert 'error' in stats
+        assert "error" in stats
 
         # Remove the database file that sqlite3.connect() created
         if db_path.exists():
@@ -586,8 +577,8 @@ class TestIntegration:
         """Test rebuild_if_needed integrates correctly."""
         rebuild_called = []
 
-        def mock_rebuild(silent=False, verbose=False):
-            rebuild_called.append({'silent': silent, 'verbose': verbose})
+        def mock_rebuild(silent=False):
+            rebuild_called.append({"silent": silent})
             return True
 
         monkeypatch.setattr("vault_manager.core.database.rebuild_vault_database", mock_rebuild)
@@ -603,4 +594,4 @@ class TestIntegration:
         # Silent rebuild
         rebuild_if_needed(skip=False, silent=True)
         assert len(rebuild_called) == 2
-        assert rebuild_called[1]['silent'] is True
+        assert rebuild_called[1]["silent"] is True

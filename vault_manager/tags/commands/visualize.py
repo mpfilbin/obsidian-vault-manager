@@ -7,16 +7,14 @@ showing the hierarchical structure of tags with interactive node layout.
 
 import json
 import random
-import sqlite3
 import sys
 from argparse import ArgumentParser, Namespace
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, Tuple
+
+from vault_manager.core.database import VaultDatabase
 
 from . import Command
-from ..common import get_vault_root
-from vault_manager.index.common import get_database_path
 
 
 class VisualizeCommand(Command):
@@ -26,79 +24,67 @@ class VisualizeCommand(Command):
     def configure_parser(parser: ArgumentParser) -> None:
         """Configure the argument parser for the visualize command."""
         parser.add_argument(
-            '--output',
+            "--output",
             type=str,
-            default='tag-hierarchy.canvas',
-            help='Output filename (default: tag-hierarchy.canvas)'
+            default="tag-hierarchy.canvas",
+            help="Output filename (default: tag-hierarchy.canvas)",
         )
         parser.add_argument(
-            '--min-count',
-            type=int,
-            default=2,
-            help='Minimum files per tag to include (default: 2)'
+            "--min-count", type=int, default=2, help="Minimum files per tag to include (default: 2)"
         )
 
     def execute(self, args: Namespace) -> None:
         """Execute the visualize command."""
-        vault_root = get_vault_root()
-        db_path = get_database_path()
+        with VaultDatabase() as db:
+            db.require_exists("tags visualize")
 
-        # Check if database exists
-        if not db_path.exists():
-            print(f"Error: Database not found: {db_path}")
-            print("\nGenerate it first with:")
-            print("  vault tags update")
-            sys.exit(1)
+            # Query tag data
+            tag_data = self._query_tag_data(db, args.min_count)
 
-        # Query tag data
-        tag_data = self._query_tag_data(db_path, args.min_count)
+            if not tag_data:
+                print("No tags found in database")
+                sys.exit(1)
 
-        if not tag_data:
-            print("No tags found in database")
-            sys.exit(1)
+            # Analyze tag hierarchy
+            hierarchy = self._analyze_hierarchy(tag_data)
 
-        # Analyze tag hierarchy
-        hierarchy = self._analyze_hierarchy(tag_data)
+            # Generate Canvas JSON
+            canvas_data = self._generate_canvas(hierarchy, tag_data)
 
-        # Generate Canvas JSON
-        canvas_data = self._generate_canvas(hierarchy, tag_data)
+            # Write output file
+            output_path = db.vault_root / args.output
+            self._write_output(output_path, canvas_data)
 
-        # Write output file
-        output_path = vault_root / args.output
-        self._write_output(output_path, canvas_data)
+            print(f"\nTag hierarchy canvas generated: {args.output}")
+            print(f"Total tags: {len(tag_data)}")
+            print(f"Top-level tags: {len(hierarchy['top_level'])}")
+            print(f"Nested tags: {len(hierarchy['nested_tags'])}")
+            print(f"Total nodes: {len(canvas_data['nodes'])}")
+            print(f"Total edges: {len(canvas_data['edges'])}")
 
-        print(f"\nTag hierarchy canvas generated: {args.output}")
-        print(f"Total tags: {len(tag_data)}")
-        print(f"Top-level tags: {len(hierarchy['top_level'])}")
-        print(f"Nested tags: {len(hierarchy['nested_tags'])}")
-        print(f"Total nodes: {len(canvas_data['nodes'])}")
-        print(f"Total edges: {len(canvas_data['edges'])}")
-
-    def _query_tag_data(self, db_path: Path, min_count: int) -> Dict[str, int]:
+    def _query_tag_data(self, db: VaultDatabase, min_count: int) -> Dict[str, int]:
         """
         Query tag data from database.
 
         Args:
-            db_path: Path to vault.db
+            db: VaultDatabase instance
             min_count: Minimum file count threshold
 
         Returns:
             Dictionary mapping tag names to file counts
         """
-        with sqlite3.connect(db_path) as conn:
-            cursor = conn.cursor()
+        results = db.query(
+            """
+            SELECT ft.tag, COUNT(*) as file_count
+            FROM file_tags ft
+            GROUP BY ft.tag
+            HAVING file_count >= ?
+            ORDER BY ft.tag
+        """,
+            (min_count,),
+        )
 
-            cursor.execute('''
-                SELECT ft.tag, COUNT(*) as file_count
-                FROM file_tags ft
-                GROUP BY ft.tag
-                HAVING file_count >= ?
-                ORDER BY ft.tag
-            ''', (min_count,))
-
-            tag_data = {tag: count for tag, count in cursor.fetchall()}
-
-        return tag_data
+        return {tag: count for tag, count in results}
 
     def _analyze_hierarchy(self, tag_data: Dict[str, int]) -> Dict[str, any]:
         """
@@ -117,9 +103,9 @@ class VisualizeCommand(Command):
         tag_to_parent = {}  # tag -> parent tag
 
         for tag in tag_data.keys():
-            if '/' in tag:
+            if "/" in tag:
                 # This is a nested tag
-                parts = tag.split('/')
+                parts = tag.split("/")
                 depth = len(parts) - 1
                 depths[tag] = depth
                 nested_tags.add(tag)
@@ -131,8 +117,8 @@ class VisualizeCommand(Command):
                         if parts[0] in tag_data:
                             top_level.add(parts[0])
                     else:
-                        parent = '/'.join(parts[:i])
-                        child = '/'.join(parts[:i+1])
+                        parent = "/".join(parts[:i])
+                        child = "/".join(parts[: i + 1])
 
                         # Only track relationships for tags that exist in tag_data
                         if child in tag_data:
@@ -146,16 +132,16 @@ class VisualizeCommand(Command):
                 depths[tag] = 0
 
         return {
-            'top_level': top_level,
-            'nested': nested,
-            'nested_tags': nested_tags,
-            'depths': depths,
-            'tag_to_parent': tag_to_parent
+            "top_level": top_level,
+            "nested": nested,
+            "nested_tags": nested_tags,
+            "depths": depths,
+            "tag_to_parent": tag_to_parent,
         }
 
     def _generate_node_id(self) -> str:
         """Generate a random 16-character hex ID for a node."""
-        return ''.join(random.choices('0123456789abcdef', k=16))
+        return "".join(random.choices("0123456789abcdef", k=16))
 
     def _get_node_color(self, count: int, max_count: int) -> str:
         """
@@ -183,9 +169,15 @@ class VisualizeCommand(Command):
         else:
             return "1"  # Blue/default
 
-    def _calculate_subtree_width(self, tag: str, hierarchy: Dict[str, any],
-                                 tag_data: Dict[str, int], node_width: int,
-                                 h_spacing: int, widths_cache: Dict[str, int]) -> int:
+    def _calculate_subtree_width(
+        self,
+        tag: str,
+        hierarchy: Dict[str, any],
+        tag_data: Dict[str, int],
+        node_width: int,
+        h_spacing: int,
+        widths_cache: Dict[str, int],
+    ) -> int:
         """
         Calculate the total width needed for a tag and all its descendants.
 
@@ -204,12 +196,12 @@ class VisualizeCommand(Command):
             return widths_cache[tag]
 
         # If no children, width is just this node
-        if tag not in hierarchy['nested']:
+        if tag not in hierarchy["nested"]:
             widths_cache[tag] = node_width
             return node_width
 
         # Get children that exist in tag_data
-        children = [c for c in hierarchy['nested'][tag] if c in tag_data]
+        children = [c for c in hierarchy["nested"][tag] if c in tag_data]
 
         if not children:
             widths_cache[tag] = node_width
@@ -217,7 +209,9 @@ class VisualizeCommand(Command):
 
         # Calculate total width of all children's subtrees
         children_total_width = sum(
-            self._calculate_subtree_width(child, hierarchy, tag_data, node_width, h_spacing, widths_cache)
+            self._calculate_subtree_width(
+                child, hierarchy, tag_data, node_width, h_spacing, widths_cache
+            )
             for child in children
         )
 
@@ -230,7 +224,9 @@ class VisualizeCommand(Command):
 
         return subtree_width
 
-    def _calculate_layout(self, hierarchy: Dict[str, any], tag_data: Dict[str, int]) -> Dict[str, Tuple[int, int]]:
+    def _calculate_layout(
+        self, hierarchy: Dict[str, any], tag_data: Dict[str, int]
+    ) -> Dict[str, Tuple[int, int]]:
         """
         Calculate node positions using a hierarchical tree layout with no overlaps.
 
@@ -244,22 +240,22 @@ class VisualizeCommand(Command):
         positions = {}
 
         # Layout parameters
-        NODE_WIDTH = 250
-        NODE_HEIGHT = 100
-        HORIZONTAL_SPACING = 100  # Increased spacing
-        VERTICAL_SPACING = 200
+        node_width = 250
+        node_height = 100
+        horizontal_spacing = 100  # Increased spacing
+        vertical_spacing = 200
 
         # Root node position
-        ROOT_X = 0
-        ROOT_Y = 0
+        root_x = 0
+        root_y = 0
 
-        positions['ROOT'] = (ROOT_X, ROOT_Y)
+        positions["ROOT"] = (root_x, root_y)
 
         # Sort top-level tags by file count (descending) for better visual balance
         sorted_top_level = sorted(
-            [t for t in hierarchy['top_level'] if t in tag_data],
+            [t for t in hierarchy["top_level"] if t in tag_data],
             key=lambda t: tag_data[t],
-            reverse=True
+            reverse=True,
         )
 
         if not sorted_top_level:
@@ -269,16 +265,17 @@ class VisualizeCommand(Command):
         widths_cache = {}
         subtree_widths = []
         for tag in sorted_top_level:
-            width = self._calculate_subtree_width(tag, hierarchy, tag_data,
-                                                 NODE_WIDTH, HORIZONTAL_SPACING, widths_cache)
+            width = self._calculate_subtree_width(
+                tag, hierarchy, tag_data, node_width, horizontal_spacing, widths_cache
+            )
             subtree_widths.append(width)
 
         # Calculate total width needed
-        total_width = sum(subtree_widths) + (len(sorted_top_level) - 1) * HORIZONTAL_SPACING
+        total_width = sum(subtree_widths) + (len(sorted_top_level) - 1) * horizontal_spacing
 
         # Start x position (centered)
-        current_x = ROOT_X - total_width / 2
-        level_y = ROOT_Y + VERTICAL_SPACING
+        current_x = root_x - total_width / 2
+        level_y = root_y + vertical_spacing
 
         # Position each top-level tag and its subtree
         for tag, subtree_width in zip(sorted_top_level, subtree_widths):
@@ -287,22 +284,39 @@ class VisualizeCommand(Command):
             positions[tag] = (int(tag_x), level_y)
 
             # Recursively position children within this subtree's allocated space
-            self._position_subtree(tag, positions, hierarchy, tag_data,
-                                 current_x, subtree_width, level_y,
-                                 NODE_WIDTH, NODE_HEIGHT, HORIZONTAL_SPACING,
-                                 VERTICAL_SPACING, widths_cache)
+            self._position_subtree(
+                tag,
+                positions,
+                hierarchy,
+                tag_data,
+                current_x,
+                level_y,
+                node_width,
+                node_height,
+                horizontal_spacing,
+                vertical_spacing,
+                widths_cache,
+            )
 
             # Move to next subtree position
-            current_x += subtree_width + HORIZONTAL_SPACING
+            current_x += subtree_width + horizontal_spacing
 
         return positions
 
-    def _position_subtree(self, parent: str, positions: Dict[str, Tuple[int, int]],
-                         hierarchy: Dict[str, any], tag_data: Dict[str, int],
-                         subtree_left: float, subtree_width: float, parent_y: int,
-                         node_width: int, node_height: int,
-                         h_spacing: int, v_spacing: int,
-                         widths_cache: Dict[str, int]) -> None:
+    def _position_subtree(
+        self,
+        parent: str,
+        positions: Dict[str, Tuple[int, int]],
+        hierarchy: Dict[str, any],
+        tag_data: Dict[str, int],
+        subtree_left: float,
+        parent_y: int,
+        node_width: int,
+        node_height: int,
+        h_spacing: int,
+        v_spacing: int,
+        widths_cache: Dict[str, int],
+    ) -> None:
         """
         Position children nodes within the allocated subtree space.
 
@@ -312,7 +326,6 @@ class VisualizeCommand(Command):
             hierarchy: Tag hierarchy structure
             tag_data: Tag counts
             subtree_left: Left edge of allocated space for this subtree
-            subtree_width: Total width allocated for this subtree
             parent_y: Y position of parent
             node_width: Width of a single node
             node_height: Height of a single node
@@ -320,12 +333,15 @@ class VisualizeCommand(Command):
             v_spacing: Vertical spacing
             widths_cache: Cache of calculated subtree widths
         """
-        if parent not in hierarchy['nested']:
+        if parent not in hierarchy["nested"]:
             return
 
         # Get children that exist in tag_data
-        children = sorted([c for c in hierarchy['nested'][parent] if c in tag_data],
-                         key=lambda c: tag_data[c], reverse=True)
+        children = sorted(
+            [c for c in hierarchy["nested"][parent] if c in tag_data],
+            key=lambda c: tag_data[c],
+            reverse=True,
+        )
 
         if not children:
             return
@@ -342,10 +358,19 @@ class VisualizeCommand(Command):
             positions[child] = (int(child_x), child_y)
 
             # Recursively position this child's subtree
-            self._position_subtree(child, positions, hierarchy, tag_data,
-                                 current_x, child_width, child_y,
-                                 node_width, node_height, h_spacing, v_spacing,
-                                 widths_cache)
+            self._position_subtree(
+                child,
+                positions,
+                hierarchy,
+                tag_data,
+                current_x,
+                child_y,
+                node_width,
+                node_height,
+                h_spacing,
+                v_spacing,
+                widths_cache,
+            )
 
             # Move to next child position
             current_x += child_width + h_spacing
@@ -373,22 +398,22 @@ class VisualizeCommand(Command):
 
         # Create root node
         root_id = self._generate_node_id()
-        node_ids['ROOT'] = root_id
-        root_x, root_y = positions.get('ROOT', (0, 0))
+        node_ids["ROOT"] = root_id
+        root_x, root_y = positions.get("ROOT", (0, 0))
 
-        nodes.append({
-            "id": root_id,
-            "type": "text",
-            "text": "# Tag Hierarchy\n\n**Total Tags:** " + str(len(tag_data)),
-            "x": root_x - 125,  # Center the root node
-            "y": root_y - 60,
-            "width": 250,
-            "height": 120,
-            "color": "6",
-            "styleAttributes": {
-                "textAlign": "center"
+        nodes.append(
+            {
+                "id": root_id,
+                "type": "text",
+                "text": "# Tag Hierarchy\n\n**Total Tags:** " + str(len(tag_data)),
+                "x": root_x - 125,  # Center the root node
+                "y": root_y - 60,
+                "width": 250,
+                "height": 120,
+                "color": "6",
+                "styleAttributes": {"textAlign": "center"},
             }
-        })
+        )
 
         # Create nodes for all tags
         for tag, count in tag_data.items():
@@ -403,62 +428,63 @@ class VisualizeCommand(Command):
             x, y = positions[tag]
 
             # Get display name (just the last part for nested tags)
-            display_name = tag.split('/')[-1] if '/' in tag else tag
+            display_name = tag.split("/")[-1] if "/" in tag else tag
 
             # Node text
             node_text = f"**{display_name}**\n\n{count} files"
-            if '/' in tag:
+            if "/" in tag:
                 node_text = f"{display_name}\n\n{count} files"
 
             # Node color based on usage
             color = self._get_node_color(count, max_count)
 
-            nodes.append({
-                "id": node_id,
-                "type": "text",
-                "text": node_text,
-                "x": x - 125,  # Center nodes on their position
-                "y": y - 50,
-                "width": 250,
-                "height": 100,
-                "color": color,
-                "styleAttributes": {
-                    "textAlign": "center"
+            nodes.append(
+                {
+                    "id": node_id,
+                    "type": "text",
+                    "text": node_text,
+                    "x": x - 125,  # Center nodes on their position
+                    "y": y - 50,
+                    "width": 250,
+                    "height": 100,
+                    "color": color,
+                    "styleAttributes": {"textAlign": "center"},
                 }
-            })
+            )
 
         # Create edges
         # Connect root to top-level tags
-        for tag in hierarchy['top_level']:
+        for tag in hierarchy["top_level"]:
             if tag in tag_data and tag in node_ids:
                 edge_id = self._generate_node_id()
-                edges.append({
-                    "id": edge_id,
-                    "fromNode": root_id,
-                    "fromSide": "bottom",
-                    "toNode": node_ids[tag],
-                    "toSide": "top"
-                })
+                edges.append(
+                    {
+                        "id": edge_id,
+                        "fromNode": root_id,
+                        "fromSide": "bottom",
+                        "toNode": node_ids[tag],
+                        "toSide": "top",
+                    }
+                )
 
         # Connect parent tags to children
         # Only create edges if both parent and child exist in tag_data
-        for parent, children in hierarchy['nested'].items():
+        for parent, children in hierarchy["nested"].items():
             if parent in tag_data and parent in node_ids:
                 for child in children:
                     if child in tag_data and child in node_ids:
                         edge_id = self._generate_node_id()
-                        edges.append({
-                            "id": edge_id,
-                            "fromNode": node_ids[parent],
-                            "fromSide": "bottom",
-                            "toNode": node_ids[child],
-                            "toSide": "top"
-                        })
+                        edges.append(
+                            {
+                                "id": edge_id,
+                                "fromNode": node_ids[parent],
+                                "fromSide": "bottom",
+                                "toNode": node_ids[child],
+                                "toSide": "top",
+                            }
+                        )
 
-        return {
-            "nodes": nodes,
-            "edges": edges
-        }
+        return {"nodes": nodes, "edges": edges}
 
     def _write_output(self, output_path: Path, canvas_data: Dict) -> None:
         """
@@ -468,5 +494,5 @@ class VisualizeCommand(Command):
             output_path: Path to output file
             canvas_data: Canvas JSON data
         """
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(canvas_data, f, indent=2)

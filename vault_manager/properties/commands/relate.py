@@ -5,25 +5,27 @@ This module implements the relate command which analyzes notes using a hybrid
 similarity algorithm and adds related property with wiki-links to similar notes.
 """
 
+import math
 import os
 import re
-import sqlite3
 import sys
 from argparse import ArgumentParser, Namespace
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from . import Command
-from ..common import get_vault_root, extract_frontmatter
-from vault_manager.index.common import get_database_path
-from vault_manager.core.vault import iter_markdown_files
-from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.database import VaultDatabase
 from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
+from vault_manager.core.frontmatter_manager import FrontmatterManager
+from vault_manager.core.vault import iter_markdown_files
+
+from ..common import extract_frontmatter
+from . import Command
 
 
 class NoteMetadata:
     """Holds metadata about a note for similarity calculation."""
+
     def __init__(self, path: Path, relative_path: str):
         self.path = path
         self.relative_path = relative_path
@@ -42,33 +44,30 @@ class RelateCommand(Command):
     def configure_parser(parser: ArgumentParser) -> None:
         """Configure the argument parser for the relate command."""
         parser.add_argument(
-            'path',
-            help='File or directory to process (relative to vault root, use "." for entire vault)'
+            "path",
+            help='File or directory to process (relative to vault root, use "." for entire vault)',
         )
         parser.add_argument(
-            '--dry-run',
-            action='store_true',
-            help='Preview changes without modifying files'
+            "--dry-run", action="store_true", help="Preview changes without modifying files"
         )
         parser.add_argument(
-            '--overwrite',
-            action='store_true',
-            help='Replace existing related properties'
+            "--overwrite", action="store_true", help="Replace existing related properties"
         )
         parser.add_argument(
-            '--max-related',
+            "--max-related",
             type=int,
             default=5,
-            help='Maximum related notes to add per file (default: 5)'
+            help="Maximum related notes to add per file (default: 5)",
         )
 
     def execute(self, args: Namespace) -> None:
         """Execute the relate command to find and add related notes."""
-        # Get vault root
-        vault_root = get_vault_root()
+        # Get vault database instance
+        db = VaultDatabase()
+        vault_root = db.vault_root
 
         # Resolve path (file or directory)
-        if args.path == '.':
+        if args.path == ".":
             target_path = vault_root
         else:
             target_path = vault_root / args.path
@@ -84,17 +83,16 @@ class RelateCommand(Command):
 
         if is_single_file:
             # Validate it's a markdown file
-            if not target_path.suffix == '.md' or target_path.name.endswith('.excalidraw.md'):
+            if not target_path.suffix == ".md" or target_path.name.endswith(".excalidraw.md"):
                 print(f"Error: Not a valid markdown file: {args.path}")
-                print(f"File must have .md extension and not be an Excalidraw file")
+                print("File must have .md extension and not be an Excalidraw file")
                 sys.exit(1)
             target_dir = target_path.parent
         else:
             target_dir = target_path
 
         # Check for database
-        db_path = get_database_path()
-        has_database = db_path.exists()
+        has_database = db.exists()
 
         # Display header
         print("=" * 60)
@@ -104,29 +102,37 @@ class RelateCommand(Command):
         if is_single_file:
             print(f"Target file: {target_path.relative_to(vault_root)}")
         else:
-            print(f"Target directory: {target_dir.relative_to(vault_root) if target_dir != vault_root else '.'}")
+            print(
+                f"Target directory: {target_dir.relative_to(vault_root) if target_dir != vault_root else '.'}"
+            )
         print(f"Mode: {'DRY RUN (preview only)' if args.dry_run else 'MODIFY FILES'}")
         print(f"Overwrite: {'Yes' if args.overwrite else 'No (skip files with related)'}")
         print(f"Max related notes: {args.max_related}")
-        print(f"Tag database: {'Found - using vault-wide frequencies' if has_database else 'Not found - will compute from scanned notes'}")
+        print(
+            f"Tag database: {'Found - using vault-wide frequencies' if has_database else 'Not found - will compute from scanned notes'}"
+        )
         if not is_single_file:
-            print(f"Ignored directories: .obsidian, .trash, Excalidraw, Calendar")
+            print("Ignored directories: .obsidian, .trash, Excalidraw, Calendar")
 
         # Scan notes
-        notes = self._scan_notes_for_metadata(target_dir, vault_root, target_path if is_single_file else None)
+        notes = self._scan_notes_for_metadata(
+            target_dir, vault_root, target_path if is_single_file else None
+        )
 
         # Find related notes
-        related_map = self._find_related_notes(notes, args.max_related, vault_root)
+        related_map = self._find_related_notes(notes, args.max_related, db)
 
         # Update files (filter to single file if needed)
         with DryRunContext(args.dry_run) as ctx:
-            ctx.stats.custom_stats['total_notes'] = len(notes)
-            ctx.stats.custom_stats['notes_with_relations'] = len(related_map)
+            ctx.stats.custom_stats["total_notes"] = len(notes)
+            ctx.stats.custom_stats["notes_with_relations"] = len(related_map)
 
             if is_single_file:
                 target_file_relative = str(target_path.relative_to(vault_root))
                 notes_to_update = {k: v for k, v in notes.items() if k == target_file_relative}
-                self._update_files_with_related(notes_to_update, related_map, vault_root, ctx, args.overwrite)
+                self._update_files_with_related(
+                    notes_to_update, related_map, vault_root, ctx, args.overwrite
+                )
             else:
                 self._update_files_with_related(notes, related_map, vault_root, ctx, args.overwrite)
 
@@ -135,44 +141,42 @@ class RelateCommand(Command):
             print_dry_run_summary(ctx)
 
             if not args.dry_run and ctx.stats.files_processed > 0:
-                print(f"\nDone! Updated {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''}.")
+                print(
+                    f"\nDone! Updated {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''}."
+                )
             elif args.dry_run and ctx.stats.files_processed > 0:
-                print(f"\nDry run complete. {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''} would be updated.")
+                print(
+                    f"\nDry run complete. {ctx.stats.files_processed} file{'s' if ctx.stats.files_processed != 1 else ''} would be updated."
+                )
             else:
                 print("\nNo files updated.")
 
-    def _get_tag_frequencies_from_database(self, vault_root: Path) -> Optional[Dict[str, int]]:
+    def _get_tag_frequencies_from_database(self, db: VaultDatabase) -> Optional[Dict[str, int]]:
         """
         Query the vault.db database for tag frequencies (3NF: compute file_count).
 
         Args:
-            vault_root: Root directory of the vault
+            db: VaultDatabase instance
 
         Returns:
             Dictionary mapping tag names to file counts, or None if database doesn't exist
         """
-        db_path = get_database_path()
-
         # If database doesn't exist, return None
-        if not db_path.exists():
+        if not db.exists():
             return None
 
         try:
-            with sqlite3.connect(db_path) as conn:
-                cursor = conn.cursor()
-
-                # 3NF: Compute file_count from file_tags table
-                cursor.execute('''
+            # 3NF: Compute file_count from file_tags table
+            with db:
+                results = db.query("""
                     SELECT ft.tag, COUNT(*) as file_count
                     FROM file_tags ft
                     GROUP BY ft.tag
-                ''')
+                """)
 
-                results = cursor.fetchall()
+            return {tag: count for tag, count in results}
 
-                return {tag: count for tag, count in results}
-
-        except sqlite3.Error:
+        except Exception:
             # If there's any database error, return None
             return None
 
@@ -181,12 +185,12 @@ class RelateCommand(Command):
         links = set()
 
         # Pattern for wiki-links: [[link]] or [[link|display]]
-        pattern = r'\[\[([^\]|]+)(?:\|[^\]]*)?\]\]'
+        pattern = r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]"
 
         for match in re.finditer(pattern, content):
             link = match.group(1).strip()
             # Normalize link
-            if link.endswith('.md'):
+            if link.endswith(".md"):
                 link = link[:-3]
             links.add(link)
 
@@ -194,21 +198,23 @@ class RelateCommand(Command):
 
     def _extract_title_words(self, title: str) -> Set[str]:
         """Extract meaningful words from a title."""
-        if title.endswith('.md'):
+        if title.endswith(".md"):
             title = title[:-3]
 
         words = set()
-        for word in re.split(r'[\s\-_]+', title.lower()):
-            if len(word) >= 3 and word not in {'the', 'and', 'for', 'with', 'from', 'into'}:
+        for word in re.split(r"[\s\-_]+", title.lower()):
+            if len(word) >= 3 and word not in {"the", "and", "for", "with", "from", "into"}:
                 words.add(word)
 
         return words
 
     def _check_has_related_property(self, frontmatter: str) -> bool:
         """Check if frontmatter has a 'related' property."""
-        return bool(re.search(r'^related:', frontmatter, re.MULTILINE))
+        return bool(re.search(r"^related:", frontmatter, re.MULTILINE))
 
-    def _scan_notes_for_metadata(self, directory: Path, vault_root: Path, single_file: Optional[Path] = None) -> Dict[str, NoteMetadata]:
+    def _scan_notes_for_metadata(
+        self, directory: Path, vault_root: Path, single_file: Optional[Path] = None
+    ) -> Dict[str, NoteMetadata]:
         """
         Scan all notes and extract metadata for similarity analysis.
 
@@ -224,11 +230,16 @@ class RelateCommand(Command):
         else:
             print("\n1. Scanning notes and extracting metadata...")
 
-        for file_path in iter_markdown_files(directory, vault_root, additional_ignores={'Excalidraw', 'Calendar'}, exclude_excalidraw=True):
+        for file_path in iter_markdown_files(
+            directory,
+            vault_root,
+            additional_ignores={"Excalidraw", "Calendar"},
+            exclude_excalidraw=True,
+        ):
             relative_path = str(file_path.relative_to(vault_root))
 
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, encoding="utf-8") as f:
                     content = f.read()
 
                 frontmatter, body = extract_frontmatter(content)
@@ -252,9 +263,16 @@ class RelateCommand(Command):
         print(f"   Found {len(notes)} notes with frontmatter")
         return notes
 
-    def _calculate_tag_similarity(self, note1: NoteMetadata, note2: NoteMetadata,
-                                  tag_frequencies: Dict[str, int]) -> float:
-        """Calculate tag similarity score with IDF-like weighting for rare tags."""
+    def _calculate_tag_similarity(
+        self, note1: NoteMetadata, note2: NoteMetadata, tag_frequencies: Dict[str, int]
+    ) -> float:
+        """Calculate tag similarity score with IDF weighting for rare tags.
+
+        Uses proper IDF (Inverse Document Frequency) formula:
+        IDF(tag) = log(total_notes / notes_with_tag)
+
+        Rare tags (low frequency) receive higher weight than common tags.
+        """
         if not note1.tags or not note2.tags:
             return 0.0
 
@@ -264,10 +282,16 @@ class RelateCommand(Command):
         if not common_tags:
             return 0.0
 
-        # Weight common tags by inverse frequency
+        # Weight tags by IDF: log(total_notes / tag_frequency)
         total_notes = sum(tag_frequencies.values())
-        weighted_common = sum(1.0 / tag_frequencies.get(tag, 1) for tag in common_tags)
-        weighted_all = sum(1.0 / tag_frequencies.get(tag, 1) for tag in all_tags)
+
+        if total_notes == 0:
+            return 0.0
+
+        weighted_common = sum(
+            math.log(total_notes / tag_frequencies.get(tag, 1)) for tag in common_tags
+        )
+        weighted_all = sum(math.log(total_notes / tag_frequencies.get(tag, 1)) for tag in all_tags)
 
         return weighted_common / weighted_all if weighted_all > 0 else 0.0
 
@@ -296,8 +320,8 @@ class RelateCommand(Command):
         if note1.folder == note2.folder:
             return 1.0
 
-        folder1_parts = note1.folder.split(os.sep) if note1.folder != '.' else []
-        folder2_parts = note2.folder.split(os.sep) if note2.folder != '.' else []
+        folder1_parts = note1.folder.split(os.sep) if note1.folder != "." else []
+        folder2_parts = note2.folder.split(os.sep) if note2.folder != "." else []
 
         if folder1_parts and folder2_parts:
             min_len = min(len(folder1_parts), len(folder2_parts))
@@ -323,8 +347,9 @@ class RelateCommand(Command):
 
         return len(common_words) / len(all_words)
 
-    def _calculate_similarity_score(self, note1: NoteMetadata, note2: NoteMetadata,
-                                    tag_frequencies: Dict[str, int]) -> float:
+    def _calculate_similarity_score(
+        self, note1: NoteMetadata, note2: NoteMetadata, tag_frequencies: Dict[str, int]
+    ) -> float:
         """
         Calculate overall similarity score using weighted components.
 
@@ -335,31 +360,31 @@ class RelateCommand(Command):
         folder_score = self._calculate_folder_similarity(note1, note2)
         title_score = self._calculate_title_similarity(note1, note2)
 
-        return (
-            tag_score * 0.40 +
-            link_score * 0.30 +
-            folder_score * 0.15 +
-            title_score * 0.15
-        )
+        return tag_score * 0.40 + link_score * 0.30 + folder_score * 0.15 + title_score * 0.15
 
-    def _find_related_notes(self, notes: Dict[str, NoteMetadata], max_related: int = 5, vault_root: Optional[Path] = None) -> Dict[str, List[Tuple[str, float]]]:
+    def _find_related_notes(
+        self,
+        notes: Dict[str, NoteMetadata],
+        max_related: int = 5,
+        db: Optional[VaultDatabase] = None,
+    ) -> Dict[str, List[Tuple[str, float]]]:
         """Find related notes for each note in the collection."""
         print("\n2. Calculating tag frequencies...")
 
         # Try to get tag frequencies from database first
         tag_frequencies_dict = None
-        if vault_root:
-            tag_frequencies_dict = self._get_tag_frequencies_from_database(vault_root)
+        if db:
+            tag_frequencies_dict = self._get_tag_frequencies_from_database(db)
 
         if tag_frequencies_dict:
             # Use database frequencies
-            print(f"   Using vault-wide tag frequencies from database")
+            print("   Using vault-wide tag frequencies from database")
             print(f"   Found {len(tag_frequencies_dict)} unique tags")
             # Convert to Counter for compatibility
             tag_frequencies = Counter(tag_frequencies_dict)
         else:
             # Fallback to computing frequencies from scanned notes
-            print(f"   Computing tag frequencies from scanned notes")
+            print("   Computing tag frequencies from scanned notes")
             tag_frequencies = Counter()
             for note in notes.values():
                 tag_frequencies.update(note.tags)
@@ -406,7 +431,9 @@ class RelateCommand(Command):
 
         return related_notes
 
-    def _add_related_to_frontmatter(self, frontmatter: str, related_notes: List[str], overwrite: bool = False) -> str:
+    def _add_related_to_frontmatter(
+        self, frontmatter: str, related_notes: List[str], overwrite: bool = False
+    ) -> str:
         """
         Add related field to YAML frontmatter.
 
@@ -425,23 +452,31 @@ class RelateCommand(Command):
             try:
                 frontmatter_dict = yaml.safe_load(frontmatter) or {}
                 # Remove existing 'related' field if present
-                if 'related' in frontmatter_dict:
-                    del frontmatter_dict['related']
+                if "related" in frontmatter_dict:
+                    del frontmatter_dict["related"]
                 # Convert back to YAML
-                frontmatter = yaml.dump(frontmatter_dict, default_flow_style=False, allow_unicode=True, sort_keys=False)
-                frontmatter = frontmatter.rstrip('\n')
+                frontmatter = yaml.dump(
+                    frontmatter_dict, default_flow_style=False, allow_unicode=True, sort_keys=False
+                )
+                frontmatter = frontmatter.rstrip("\n")
             except yaml.YAMLError:
                 # If YAML parsing fails, fall back to simple append
                 pass
 
-        related_yaml = "related:\n" + "\n".join(f"  - \"[[{note}]]\"" for note in related_notes)
-        return f'{frontmatter}\n{related_yaml}'
+        related_yaml = "related:\n" + "\n".join(f'  - "[[{note}]]"' for note in related_notes)
+        return f"{frontmatter}\n{related_yaml}"
 
-    def _update_file_with_related(self, file_path: Path, related_paths: List[str],
-                                  vault_root: Path, dry_run: bool = False, overwrite: bool = False) -> bool:
+    def _update_file_with_related(
+        self,
+        file_path: Path,
+        related_paths: List[str],
+        vault_root: Path,
+        dry_run: bool = False,
+        overwrite: bool = False,
+    ) -> bool:
         """Update a file with related notes in its frontmatter."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding="utf-8") as f:
                 content = f.read()
 
             frontmatter, body = extract_frontmatter(content)
@@ -456,11 +491,13 @@ class RelateCommand(Command):
                 note_name = note_path.stem  # Just the filename without extension
                 related_notes.append(note_name)
 
-            updated_frontmatter = self._add_related_to_frontmatter(frontmatter, related_notes, overwrite)
+            updated_frontmatter = self._add_related_to_frontmatter(
+                frontmatter, related_notes, overwrite
+            )
             updated_content = f"---\n{updated_frontmatter}\n---\n{body}"
 
             if not dry_run:
-                with open(file_path, 'w', encoding='utf-8') as f:
+                with open(file_path, "w", encoding="utf-8") as f:
                     f.write(updated_content)
 
             return True
@@ -469,37 +506,44 @@ class RelateCommand(Command):
             print(f"  Error updating {file_path}: {e}")
             return False
 
-    def _update_files_with_related(self, notes: Dict[str, NoteMetadata],
-                                   related_map: Dict[str, List[Tuple[str, float]]],
-                                   vault_root: Path, ctx: DryRunContext, overwrite: bool) -> None:
+    def _update_files_with_related(
+        self,
+        notes: Dict[str, NoteMetadata],
+        related_map: Dict[str, List[Tuple[str, float]]],
+        vault_root: Path,
+        ctx: DryRunContext,
+        overwrite: bool,
+    ) -> None:
         """Update files with related notes."""
         print(f"\n4. {'Would update' if ctx.dry_run else 'Updating'} files with related notes...")
 
         for path, note in notes.items():
             if path not in related_map:
-                ctx.stats.increment('skipped_no_relations')
+                ctx.stats.increment("skipped_no_relations")
                 continue
 
             if note.has_related and not overwrite:
                 print(f"  Skipping (has related): {path}")
-                ctx.stats.increment('skipped_has_related')
+                ctx.stats.increment("skipped_has_related")
                 continue
 
             related_paths = [r[0] for r in related_map[path]]
 
-            if self._update_file_with_related(note.path, related_paths, vault_root, ctx.dry_run, overwrite):
-                ctx.stats.increment('files_processed')
+            if self._update_file_with_related(
+                note.path, related_paths, vault_root, ctx.dry_run, overwrite
+            ):
+                ctx.stats.increment("files_processed")
                 ctx.record_change(
                     note.path,
                     f"Added {len(related_paths)} related note(s)",
-                    related_notes=related_paths
+                    related_notes=related_paths,
                 )
                 mode = "Would add" if ctx.dry_run else "Added"
                 print(f"  {mode} related to: {path}")
                 for rel_path, score in related_map[path]:
                     print(f"    - {rel_path} (score: {score:.3f})")
             else:
-                ctx.stats.increment('files_failed')
+                ctx.stats.increment("files_failed")
 
     def _print_custom_summary(self, ctx: DryRunContext) -> None:
         """Print custom summary of processing results."""
@@ -507,6 +551,8 @@ class RelateCommand(Command):
         print("Related Notes Details")
         print("=" * 60)
         print(f"Total notes scanned: {ctx.stats.custom_stats.get('total_notes', 0)}")
-        print(f"Notes with relations found: {ctx.stats.custom_stats.get('notes_with_relations', 0)}")
+        print(
+            f"Notes with relations found: {ctx.stats.custom_stats.get('notes_with_relations', 0)}"
+        )
         print(f"Skipped (has related): {ctx.stats.custom_stats.get('skipped_has_related', 0)}")
         print(f"Skipped (no relations): {ctx.stats.custom_stats.get('skipped_no_relations', 0)}")

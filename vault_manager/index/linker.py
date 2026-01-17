@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from .common import get_vault_root
+from vault_manager.core import get_vault_root
 
 EXTERNAL_URL_PROTOCOLS = ('http://', 'https://', 'file://', '//', 'ftp://', 'mailto:')
 

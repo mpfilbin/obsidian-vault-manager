@@ -296,7 +296,7 @@ Many commands automatically rebuild the database after making changes:
 from vault_manager.core.database import auto_rebuild_after
 
 class PurgeCommand(Command):
-    @auto_rebuild_after("tag purge")
+    @auto_rebuild_after()
     def execute(self, args):
         # Remove tags from files
         # ...
