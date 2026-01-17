@@ -105,25 +105,26 @@ class BuildCommand(Command):
         print("\n[Phase 4/5] Populating database tables...")
 
         try:
-            with db.transaction() as conn:
-                # Populate files table
-                self._populate_files_table(conn, files)
-                print(f"  ✓ Files table: {len(files)} entries")
+            with db:  # Enter context manager to establish connection
+                with db.transaction() as conn:
+                    # Populate files table
+                    self._populate_files_table(conn, files)
+                    print(f"  ✓ Files table: {len(files)} entries")
 
-                # Populate tags and file_tags tables
-                tags_count = self._populate_tags_tables(conn, files)
-                print(f"  ✓ Tags table: {tags_count} unique tags")
+                    # Populate tags and file_tags tables
+                    tags_count = self._populate_tags_tables(conn, files)
+                    print(f"  ✓ Tags table: {tags_count} unique tags")
 
-                # Populate links table
-                self._populate_links_table(conn, all_links)
-                print(f"  ✓ Links table: {len(all_links)} links")
+                    # Populate links table
+                    self._populate_links_table(conn, all_links)
+                    print(f"  ✓ Links table: {len(all_links)} links")
 
-                # Update metadata
-                self._populate_metadata_table(conn, files, all_links, db.vault_root)
-                print("  ✓ Metadata table: statistics recorded")
+                    # Update metadata
+                    self._populate_metadata_table(conn, files, all_links, db.vault_root)
+                    print("  ✓ Metadata table: statistics recorded")
 
-                # Transaction automatically commits on successful exit
-            print("✓ All tables populated successfully")
+                    # Transaction automatically commits on successful exit
+                print("✓ All tables populated successfully")
 
         except Exception as e:
             # Transaction automatically rolled back on exception
