@@ -5,22 +5,35 @@ This module implements the relate command which analyzes notes using a hybrid
 similarity algorithm and adds related property with wiki-links to similar notes.
 """
 
+import hashlib
 import math
 import os
 import re
 import sys
 from argparse import ArgumentParser, Namespace
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from vault_manager.core.database import VaultDatabase
 from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
+from vault_manager.core.embeddings import EmbeddingError, embed_texts, pack_vector, unpack_vector
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 
 from ..common import extract_frontmatter
 from . import Command
+
+try:
+    import numpy as np
+
+    HAS_NUMPY = True
+except ImportError:
+    np = None
+    HAS_NUMPY = False
+
+DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 
 
 class NoteMetadata:
@@ -35,6 +48,8 @@ class NoteMetadata:
         self.title_words: Set[str] = set()
         self.folder: str = ""
         self.has_related: bool = False
+        self.is_sensitive: bool = False
+        self.embedding_text: str = ""
 
 
 class RelateCommand(Command):
@@ -119,8 +134,23 @@ class RelateCommand(Command):
             target_dir, vault_root, target_path if is_single_file else None
         )
 
+        # Compute semantic embeddings if OpenRouter is configured
+        api_key = self._get_openrouter_api_key()
+        semantic_vectors: Optional[Dict[str, List[float]]] = None
+        if api_key and HAS_NUMPY:
+            model = self._get_embedding_model()
+            print(f"\nSemantic scoring: Enabled (model: {model})")
+            semantic_vectors = self._compute_semantic_embeddings(notes, db, api_key, model)
+        elif api_key and not HAS_NUMPY:
+            print(
+                "\nSemantic scoring: Disabled (numpy not installed - "
+                "run `pip install -e '.[ai]'`)"
+            )
+        else:
+            print("\nSemantic scoring: Disabled (set OPENROUTER_API_KEY to enable)")
+
         # Find related notes
-        related_map = self._find_related_notes(notes, args.max_related, db)
+        related_map = self._find_related_notes(notes, args.max_related, db, semantic_vectors)
 
         # Update files (filter to single file if needed)
         with DryRunContext(args.dry_run) as ctx:
@@ -212,6 +242,133 @@ class RelateCommand(Command):
         """Check if frontmatter has a 'related' property."""
         return bool(re.search(r"^related:", frontmatter, re.MULTILINE))
 
+    def _strip_markdown_for_embedding(self, text: str) -> str:
+        """Remove markdown formatting from text before embedding."""
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        text = re.sub(r"__(.+?)__", r"\1", text)
+        text = re.sub(r"\*(.+?)\*", r"\1", text)
+        text = re.sub(r"_(.+?)_", r"\1", text)
+        text = re.sub(r"`(.+?)`", r"\1", text)
+        text = re.sub(
+            r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]", lambda m: m.group(2) or m.group(1), text
+        )
+        text = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", text)
+        text = re.sub(r"~~(.+?)~~", r"\1", text)
+        text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+        return text
+
+    def _prepare_embedding_text(self, body: str) -> str:
+        """Strip markdown formatting and truncate body text for embedding."""
+        stripped = self._strip_markdown_for_embedding(body)
+        return stripped[:6000]
+
+    def _compute_content_hash(self, text: str) -> str:
+        """Compute a stable hash of embedding text for cache invalidation."""
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _get_openrouter_api_key(self) -> Optional[str]:
+        """Read the OpenRouter API key from the environment, if set."""
+        return os.environ.get("OPENROUTER_API_KEY")
+
+    def _get_embedding_model(self) -> str:
+        """Read the configured embedding model, defaulting to text-embedding-3-small."""
+        return os.environ.get("OPENROUTER_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
+
+    def _compute_semantic_embeddings(
+        self,
+        notes: Dict[str, NoteMetadata],
+        db: VaultDatabase,
+        api_key: str,
+        model: str,
+    ) -> Dict[str, List[float]]:
+        """
+        Compute (or reuse cached) embeddings for all non-sensitive notes.
+
+        Returns:
+            Dict mapping file_path -> embedding vector for every note with a
+            usable embedding. Sensitive notes, notes with an empty embedding
+            text, and notes whose embedding request failed (or returned a
+            mismatched number of vectors), are simply absent from the
+            returned dict.
+        """
+        vectors: Dict[str, List[float]] = {}
+        upserts: List[Tuple[str, str, str, bytes, str]] = []
+
+        with db:
+            db.write(
+                """
+                CREATE TABLE IF NOT EXISTS note_embeddings (
+                    file_path TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    vector BLOB NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
+            cached_rows = db.query(
+                "SELECT file_path, content_hash, vector FROM note_embeddings WHERE model = ?",
+                (model,),
+            )
+            cached = {
+                path: (content_hash, unpack_vector(blob))
+                for path, content_hash, blob in cached_rows
+            }
+
+            to_embed: List[Tuple[str, str, str]] = []  # (file_path, text, content_hash)
+
+            for path, note in notes.items():
+                if note.is_sensitive or not note.embedding_text.strip():
+                    continue
+
+                content_hash = self._compute_content_hash(note.embedding_text)
+                cached_entry = cached.get(path)
+
+                if cached_entry and cached_entry[0] == content_hash:
+                    vectors[path] = cached_entry[1]
+                else:
+                    to_embed.append((path, note.embedding_text, content_hash))
+
+            batch_size = 50
+            for i in range(0, len(to_embed), batch_size):
+                batch = to_embed[i : i + batch_size]
+                texts = [text for _, text, _ in batch]
+
+                try:
+                    embeddings = embed_texts(texts, model, api_key)
+                except EmbeddingError as e:
+                    print(f"   Warning: Embedding request failed for {len(batch)} note(s): {e}")
+                    continue
+
+                if len(embeddings) != len(texts):
+                    print(
+                        f"   Warning: Embedding response returned {len(embeddings)} vector(s) "
+                        f"for {len(texts)} note(s) requested; skipping this batch"
+                    )
+                    continue
+
+                timestamp = datetime.now(timezone.utc).isoformat()
+                for (path, _, content_hash), vector in zip(batch, embeddings):
+                    vectors[path] = vector
+                    upserts.append((path, content_hash, model, pack_vector(vector), timestamp))
+
+            if upserts:
+                db.write_many(
+                    """
+                    INSERT INTO note_embeddings (file_path, content_hash, model, vector, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(file_path) DO UPDATE SET
+                        content_hash = excluded.content_hash,
+                        model = excluded.model,
+                        vector = excluded.vector,
+                        created_at = excluded.created_at
+                    """,
+                    upserts,
+                )
+
+        return vectors
+
     def _scan_notes_for_metadata(
         self, directory: Path, vault_root: Path, single_file: Optional[Path] = None
     ) -> Dict[str, NoteMetadata]:
@@ -254,6 +411,8 @@ class RelateCommand(Command):
                 note.title_words = self._extract_title_words(file_path.name)
                 note.folder = str(file_path.parent.relative_to(vault_root))
                 note.has_related = self._check_has_related_property(frontmatter)
+                note.is_sensitive = FrontmatterManager.is_sensitive_note(content)
+                note.embedding_text = self._prepare_embedding_text(body)
 
                 notes[relative_path] = note
 
@@ -348,25 +507,62 @@ class RelateCommand(Command):
         return len(common_words) / len(all_words)
 
     def _calculate_similarity_score(
-        self, note1: NoteMetadata, note2: NoteMetadata, tag_frequencies: Dict[str, int]
+        self,
+        note1: NoteMetadata,
+        note2: NoteMetadata,
+        tag_frequencies: Dict[str, int],
+        semantic_score: Optional[float] = None,
     ) -> float:
         """
         Calculate overall similarity score using weighted components.
 
-        Weights: Tag (40%), Link (30%), Folder (15%), Title (15%)
+        With a semantic score: Semantic (40%), Tag (25%), Link (20%), Folder (7.5%), Title (7.5%)
+        Without one: Tag (40%), Link (30%), Folder (15%), Title (15%)
         """
         tag_score = self._calculate_tag_similarity(note1, note2, tag_frequencies)
         link_score = self._calculate_link_similarity(note1, note2)
         folder_score = self._calculate_folder_similarity(note1, note2)
         title_score = self._calculate_title_similarity(note1, note2)
 
-        return tag_score * 0.40 + link_score * 0.30 + folder_score * 0.15 + title_score * 0.15
+        if semantic_score is None:
+            return tag_score * 0.40 + link_score * 0.30 + folder_score * 0.15 + title_score * 0.15
+
+        return (
+            semantic_score * 0.40
+            + tag_score * 0.25
+            + link_score * 0.20
+            + folder_score * 0.075
+            + title_score * 0.075
+        )
+
+    def _build_semantic_similarity_lookup(
+        self, semantic_vectors: Optional[Dict[str, List[float]]]
+    ) -> Tuple[Dict[str, int], Optional["np.ndarray"]]:
+        """Build a path->index map and a normalized embedding matrix (N x D).
+
+        Callers compute cosine similarity for a pair via a dot product between
+        two rows. This avoids materializing the full N x N similarity matrix,
+        which would cost O(N^2) memory on top of the existing O(N^2) pairwise
+        comparison loop for large vaults.
+        """
+        if not semantic_vectors or not HAS_NUMPY:
+            return {}, None
+
+        paths = list(semantic_vectors.keys())
+        matrix = np.array([semantic_vectors[p] for p in paths], dtype=np.float32)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1e-10
+        normalized = matrix / norms
+
+        path_to_index = {path: i for i, path in enumerate(paths)}
+        return path_to_index, normalized
 
     def _find_related_notes(
         self,
         notes: Dict[str, NoteMetadata],
         max_related: int = 5,
         db: Optional[VaultDatabase] = None,
+        semantic_vectors: Optional[Dict[str, List[float]]] = None,
     ) -> Dict[str, List[Tuple[str, float]]]:
         """Find related notes for each note in the collection."""
         print("\n2. Calculating tag frequencies...")
@@ -392,6 +588,8 @@ class RelateCommand(Command):
 
         print("\n3. Computing similarity scores...")
 
+        path_to_index, normalized_matrix = self._build_semantic_similarity_lookup(semantic_vectors)
+
         related_notes = {}
         note_list = list(notes.items())
         total_comparisons = len(note_list) * (len(note_list) - 1) // 2
@@ -403,7 +601,15 @@ class RelateCommand(Command):
             for j in range(i + 1, len(note_list)):
                 path2, note2 = note_list[j]
 
-                score = self._calculate_similarity_score(note1, note2, tag_frequencies)
+                semantic_score = None
+                if path1 in path_to_index and path2 in path_to_index:
+                    row1 = normalized_matrix[path_to_index[path1]]
+                    row2 = normalized_matrix[path_to_index[path2]]
+                    semantic_score = max(0.0, float(np.dot(row1, row2)))
+
+                score = self._calculate_similarity_score(
+                    note1, note2, tag_frequencies, semantic_score
+                )
 
                 if score > 0.01:
                     scores.append((path2, score))
