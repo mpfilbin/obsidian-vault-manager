@@ -290,3 +290,32 @@ class TestCalculateSimilarityScoreWeights:
         with_zero_semantic = cmd._calculate_similarity_score(note1, note2, Counter(), semantic_score=0.0)
 
         assert with_zero_semantic == pytest.approx(0.0, abs=1e-6)
+
+    def _notes_with_folder_overlap_only(self, tmp_path):
+        # Parent/child folders give folder_score = 0.5 via _calculate_folder_similarity.
+        # Tags/links/title are empty/disjoint so those components are 0.
+        note1 = NoteMetadata(tmp_path / "a.md", "a.md")
+        note1.folder = "Parent"
+
+        note2 = NoteMetadata(tmp_path / "b.md", "b.md")
+        note2.folder = "Parent/Child"
+
+        return note1, note2
+
+    def test_rebalanced_folder_weight_with_semantic_score(self, tmp_path):
+        cmd = RelateCommand()
+        note1, note2 = self._notes_with_folder_overlap_only(tmp_path)
+
+        score = cmd._calculate_similarity_score(note1, note2, Counter(), semantic_score=0.5)
+
+        # semantic 0.5*0.40 + folder 0.5*0.075 (tag/link/title all 0)
+        assert score == pytest.approx(0.5 * 0.40 + 0.5 * 0.075, abs=1e-6)
+
+    def test_rebalanced_folder_weight_without_semantic_score(self, tmp_path):
+        cmd = RelateCommand()
+        note1, note2 = self._notes_with_folder_overlap_only(tmp_path)
+
+        score = cmd._calculate_similarity_score(note1, note2, Counter(), semantic_score=None)
+
+        # folder 0.5*0.15 (tag/link/title all 0, no semantic term at all)
+        assert score == pytest.approx(0.5 * 0.15, abs=1e-6)
