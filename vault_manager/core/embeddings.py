@@ -7,7 +7,6 @@ library for HTTP so no new HTTP dependency is required.
 """
 
 import json
-import urllib.error
 import urllib.request
 from array import array
 from typing import List

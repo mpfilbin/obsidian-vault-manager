@@ -69,6 +69,14 @@ class TestEmbedTexts:
             with pytest.raises(EmbeddingError):
                 embed_texts(["a"], "openai/text-embedding-3-small", "test-key")
 
+    def test_converts_read_phase_timeout_to_embedding_error(self):
+        with patch(
+            "vault_manager.core.embeddings.urllib.request.urlopen",
+            side_effect=TimeoutError("read timed out"),
+        ):
+            with pytest.raises(EmbeddingError):
+                embed_texts(["a"], "openai/text-embedding-3-small", "test-key")
+
 
 class TestPackUnpackVector:
     def test_roundtrip_preserves_values(self):
