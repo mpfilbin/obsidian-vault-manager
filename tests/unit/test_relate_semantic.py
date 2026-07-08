@@ -48,6 +48,14 @@ class TestPrepareEmbeddingText:
 
         assert result.strip() == "A short note body."
 
+    def test_strips_mixed_wiki_link_and_markdown_link_without_corruption(self):
+        cmd = RelateCommand()
+        text = "See [[Wiki|display]] and then a [link](url) after."
+
+        result = cmd._strip_markdown_for_embedding(text)
+
+        assert result == "See display and then a link after."
+
 
 class TestComputeContentHash:
     def test_same_text_same_hash(self):

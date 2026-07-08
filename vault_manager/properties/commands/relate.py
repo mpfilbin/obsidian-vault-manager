@@ -12,28 +12,16 @@ import re
 import sys
 from argparse import ArgumentParser, Namespace
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from vault_manager.core.database import VaultDatabase
 from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
-from vault_manager.core.embeddings import EmbeddingError, embed_texts, pack_vector, unpack_vector
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 
 from ..common import extract_frontmatter
 from . import Command
-
-try:
-    import numpy as np
-
-    HAS_NUMPY = True
-except ImportError:
-    np = None
-    HAS_NUMPY = False
-
-DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 
 
 class NoteMetadata:
@@ -234,10 +222,10 @@ class RelateCommand(Command):
         text = re.sub(r"\*(.+?)\*", r"\1", text)
         text = re.sub(r"_(.+?)_", r"\1", text)
         text = re.sub(r"`(.+?)`", r"\1", text)
-        text = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", text)
         text = re.sub(
             r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]", lambda m: m.group(2) or m.group(1), text
         )
+        text = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", text)
         text = re.sub(r"~~(.+?)~~", r"\1", text)
         text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
         return text
