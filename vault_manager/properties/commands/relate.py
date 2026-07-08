@@ -538,7 +538,13 @@ class RelateCommand(Command):
     def _build_semantic_similarity_lookup(
         self, semantic_vectors: Optional[Dict[str, List[float]]]
     ) -> Tuple[Dict[str, int], Optional["np.ndarray"]]:
-        """Build a path->index map and a precomputed cosine similarity matrix."""
+        """Build a path->index map and a normalized embedding matrix (N x D).
+
+        Callers compute cosine similarity for a pair via a dot product between
+        two rows. This avoids materializing the full N x N similarity matrix,
+        which would cost O(N^2) memory on top of the existing O(N^2) pairwise
+        comparison loop for large vaults.
+        """
         if not semantic_vectors or not HAS_NUMPY:
             return {}, None
 
@@ -547,10 +553,9 @@ class RelateCommand(Command):
         norms = np.linalg.norm(matrix, axis=1, keepdims=True)
         norms[norms == 0] = 1e-10
         normalized = matrix / norms
-        similarity_matrix = normalized @ normalized.T
 
         path_to_index = {path: i for i, path in enumerate(paths)}
-        return path_to_index, similarity_matrix
+        return path_to_index, normalized
 
     def _find_related_notes(
         self,
@@ -583,7 +588,7 @@ class RelateCommand(Command):
 
         print("\n3. Computing similarity scores...")
 
-        path_to_index, similarity_matrix = self._build_semantic_similarity_lookup(semantic_vectors)
+        path_to_index, normalized_matrix = self._build_semantic_similarity_lookup(semantic_vectors)
 
         related_notes = {}
         note_list = list(notes.items())
@@ -598,10 +603,9 @@ class RelateCommand(Command):
 
                 semantic_score = None
                 if path1 in path_to_index and path2 in path_to_index:
-                    semantic_score = max(
-                        0.0,
-                        float(similarity_matrix[path_to_index[path1], path_to_index[path2]]),
-                    )
+                    row1 = normalized_matrix[path_to_index[path1]]
+                    row2 = normalized_matrix[path_to_index[path2]]
+                    semantic_score = max(0.0, float(np.dot(row1, row2)))
 
                 score = self._calculate_similarity_score(
                     note1, note2, tag_frequencies, semantic_score

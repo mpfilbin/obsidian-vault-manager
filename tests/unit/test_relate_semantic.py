@@ -434,6 +434,30 @@ class TestFindRelatedNotesWithSemanticVectors:
         assert score == pytest.approx(0.5 * 0.15, abs=1e-6)
 
 
+class TestBuildSemanticSimilarityLookup:
+    def test_returns_normalized_embedding_matrix_not_full_similarity_matrix(self):
+        cmd = RelateCommand()
+        semantic_vectors = {
+            "a.md": [3.0, 4.0],
+            "b.md": [1.0, 0.0],
+            "c.md": [0.0, 2.0],
+        }
+
+        path_to_index, matrix = cmd._build_semantic_similarity_lookup(semantic_vectors)
+
+        # Shape must be N x D (3 notes x 2 dims), never N x N - materializing
+        # the full pairwise similarity matrix upfront is the O(N^2) memory
+        # blowup this test guards against for large vaults.
+        assert matrix.shape == (3, 2)
+        assert set(path_to_index.keys()) == {"a.md", "b.md", "c.md"}
+
+        # Rows must be unit-normalized so callers can get cosine similarity
+        # via a plain dot product between any two rows.
+        for path, index in path_to_index.items():
+            row_norm = (matrix[index] ** 2).sum() ** 0.5
+            assert row_norm == pytest.approx(1.0, abs=1e-6)
+
+
 class TestScanNotesPopulatesEmbeddingFields:
     def test_embedding_text_and_sensitivity_are_populated(self, tmp_path):
         note_path = tmp_path / "note.md"
