@@ -5,22 +5,35 @@ This module implements the relate command which analyzes notes using a hybrid
 similarity algorithm and adds related property with wiki-links to similar notes.
 """
 
+import hashlib
 import math
 import os
 import re
 import sys
 from argparse import ArgumentParser, Namespace
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from vault_manager.core.database import VaultDatabase
 from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
+from vault_manager.core.embeddings import EmbeddingError, embed_texts, pack_vector, unpack_vector
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 
 from ..common import extract_frontmatter
 from . import Command
+
+try:
+    import numpy as np
+
+    HAS_NUMPY = True
+except ImportError:
+    np = None
+    HAS_NUMPY = False
+
+DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 
 
 class NoteMetadata:
@@ -35,6 +48,8 @@ class NoteMetadata:
         self.title_words: Set[str] = set()
         self.folder: str = ""
         self.has_related: bool = False
+        self.is_sensitive: bool = False
+        self.embedding_text: str = ""
 
 
 class RelateCommand(Command):
@@ -211,6 +226,30 @@ class RelateCommand(Command):
     def _check_has_related_property(self, frontmatter: str) -> bool:
         """Check if frontmatter has a 'related' property."""
         return bool(re.search(r"^related:", frontmatter, re.MULTILINE))
+
+    def _strip_markdown_for_embedding(self, text: str) -> str:
+        """Remove markdown formatting from text before embedding."""
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        text = re.sub(r"__(.+?)__", r"\1", text)
+        text = re.sub(r"\*(.+?)\*", r"\1", text)
+        text = re.sub(r"_(.+?)_", r"\1", text)
+        text = re.sub(r"`(.+?)`", r"\1", text)
+        text = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", text)
+        text = re.sub(
+            r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]", lambda m: m.group(2) or m.group(1), text
+        )
+        text = re.sub(r"~~(.+?)~~", r"\1", text)
+        text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+        return text
+
+    def _prepare_embedding_text(self, body: str) -> str:
+        """Strip markdown formatting and truncate body text for embedding."""
+        stripped = self._strip_markdown_for_embedding(body)
+        return stripped[:6000]
+
+    def _compute_content_hash(self, text: str) -> str:
+        """Compute a stable hash of embedding text for cache invalidation."""
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     def _scan_notes_for_metadata(
         self, directory: Path, vault_root: Path, single_file: Optional[Path] = None
