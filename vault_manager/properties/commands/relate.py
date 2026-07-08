@@ -12,16 +12,20 @@ import re
 import sys
 from argparse import ArgumentParser, Namespace
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from vault_manager.core.database import VaultDatabase
 from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
+from vault_manager.core.embeddings import EmbeddingError, embed_texts, pack_vector, unpack_vector
 from vault_manager.core.frontmatter_manager import FrontmatterManager
 from vault_manager.core.vault import iter_markdown_files
 
 from ..common import extract_frontmatter
 from . import Command
+
+DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 
 
 class NoteMetadata:
@@ -238,6 +242,100 @@ class RelateCommand(Command):
     def _compute_content_hash(self, text: str) -> str:
         """Compute a stable hash of embedding text for cache invalidation."""
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _get_openrouter_api_key(self) -> Optional[str]:
+        """Read the OpenRouter API key from the environment, if set."""
+        return os.environ.get("OPENROUTER_API_KEY")
+
+    def _get_embedding_model(self) -> str:
+        """Read the configured embedding model, defaulting to text-embedding-3-small."""
+        return os.environ.get("OPENROUTER_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL)
+
+    def _compute_semantic_embeddings(
+        self,
+        notes: Dict[str, NoteMetadata],
+        db: VaultDatabase,
+        api_key: str,
+        model: str,
+    ) -> Dict[str, List[float]]:
+        """
+        Compute (or reuse cached) embeddings for all non-sensitive notes.
+
+        Returns:
+            Dict mapping file_path -> embedding vector for every note with a
+            usable embedding. Sensitive notes, and notes whose embedding
+            request failed, are simply absent from the returned dict.
+        """
+        vectors: Dict[str, List[float]] = {}
+        upserts: List[Tuple[str, str, str, bytes, str]] = []
+
+        with db:
+            db.write(
+                """
+                CREATE TABLE IF NOT EXISTS note_embeddings (
+                    file_path TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    vector BLOB NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
+            cached_rows = db.query(
+                "SELECT file_path, content_hash, vector FROM note_embeddings WHERE model = ?",
+                (model,),
+            )
+            cached = {
+                path: (content_hash, unpack_vector(blob))
+                for path, content_hash, blob in cached_rows
+            }
+
+            to_embed: List[Tuple[str, str, str]] = []  # (file_path, text, content_hash)
+
+            for path, note in notes.items():
+                if note.is_sensitive:
+                    continue
+
+                content_hash = self._compute_content_hash(note.embedding_text)
+                cached_entry = cached.get(path)
+
+                if cached_entry and cached_entry[0] == content_hash:
+                    vectors[path] = cached_entry[1]
+                else:
+                    to_embed.append((path, note.embedding_text, content_hash))
+
+            batch_size = 50
+            for i in range(0, len(to_embed), batch_size):
+                batch = to_embed[i : i + batch_size]
+                texts = [text for _, text, _ in batch]
+
+                try:
+                    embeddings = embed_texts(texts, model, api_key)
+                except EmbeddingError as e:
+                    print(f"   Warning: Embedding request failed for {len(batch)} note(s): {e}")
+                    continue
+
+                timestamp = datetime.now(timezone.utc).isoformat()
+                for (path, _, content_hash), vector in zip(batch, embeddings):
+                    vectors[path] = vector
+                    upserts.append((path, content_hash, model, pack_vector(vector), timestamp))
+
+            if upserts:
+                db.write_many(
+                    """
+                    INSERT INTO note_embeddings (file_path, content_hash, model, vector, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(file_path) DO UPDATE SET
+                        content_hash = excluded.content_hash,
+                        model = excluded.model,
+                        vector = excluded.vector,
+                        created_at = excluded.created_at
+                    """,
+                    upserts,
+                )
+
+        return vectors
 
     def _scan_notes_for_metadata(
         self, directory: Path, vault_root: Path, single_file: Optional[Path] = None

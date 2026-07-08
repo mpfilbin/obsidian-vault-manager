@@ -283,3 +283,5 @@ def reset_environment(monkeypatch):
     """
     # Remove API keys to prevent accidental API calls in tests
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_EMBEDDING_MODEL", raising=False)

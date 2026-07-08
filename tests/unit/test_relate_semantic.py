@@ -7,6 +7,12 @@ weights, and the end-to-end acceptance case where two notes with no
 structural overlap are still related via semantic similarity.
 """
 
+from unittest.mock import patch
+
+import pytest
+
+from vault_manager.core.database import VaultDatabase
+from vault_manager.core.embeddings import EmbeddingError, pack_vector
 from vault_manager.properties.commands.relate import NoteMetadata, RelateCommand
 
 
@@ -75,3 +81,157 @@ class TestNoteMetadataDefaults:
 
         assert note.is_sensitive is False
         assert note.embedding_text == ""
+
+
+def _make_note(tmp_path, name, embedding_text, is_sensitive=False):
+    path = tmp_path / name
+    path.write_text(f"---\ntags: []\n---\n{embedding_text}\n", encoding="utf-8")
+    note = NoteMetadata(path, name)
+    note.embedding_text = embedding_text
+    note.is_sensitive = is_sensitive
+    return note
+
+
+class TestApiKeyAndModelConfig:
+    def test_no_key_returns_none(self, monkeypatch):
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        cmd = RelateCommand()
+
+        assert cmd._get_openrouter_api_key() is None
+
+    def test_key_is_read_from_env(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-123")
+        cmd = RelateCommand()
+
+        assert cmd._get_openrouter_api_key() == "sk-test-123"
+
+    def test_default_model(self, monkeypatch):
+        monkeypatch.delenv("OPENROUTER_EMBEDDING_MODEL", raising=False)
+        cmd = RelateCommand()
+
+        assert cmd._get_embedding_model() == "openai/text-embedding-3-small"
+
+    def test_model_override_from_env(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_EMBEDDING_MODEL", "openai/text-embedding-3-large")
+        cmd = RelateCommand()
+
+        assert cmd._get_embedding_model() == "openai/text-embedding-3-large"
+
+
+class TestComputeSemanticEmbeddings:
+    def test_embeds_new_notes_and_caches_them(self, vault_database, tmp_path):
+        db = VaultDatabase(vault_root=tmp_path)
+        notes = {
+            "a.md": _make_note(tmp_path, "a.md", "content about cats"),
+            "b.md": _make_note(tmp_path, "b.md", "content about dogs"),
+        }
+        cmd = RelateCommand()
+
+        with patch(
+            "vault_manager.properties.commands.relate.embed_texts",
+            return_value=[[1.0, 0.0], [0.0, 1.0]],
+        ) as mock_embed:
+            vectors = cmd._compute_semantic_embeddings(
+                notes, db, "test-key", "openai/text-embedding-3-small"
+            )
+
+        assert vectors["a.md"] == [1.0, 0.0]
+        assert vectors["b.md"] == [0.0, 1.0]
+        mock_embed.assert_called_once()
+
+        with db:
+            rows = db.query("SELECT file_path, model FROM note_embeddings ORDER BY file_path")
+        assert rows == [("a.md", "openai/text-embedding-3-small"), ("b.md", "openai/text-embedding-3-small")]
+
+    def test_reuses_cached_embedding_when_hash_matches(self, vault_database, tmp_path):
+        db = VaultDatabase(vault_root=tmp_path)
+        note = _make_note(tmp_path, "a.md", "stable content")
+        content_hash = RelateCommand()._compute_content_hash("stable content")
+
+        with db:
+            db.write(
+                """
+                CREATE TABLE IF NOT EXISTS note_embeddings (
+                    file_path TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    vector BLOB NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            db.write(
+                "INSERT INTO note_embeddings VALUES (?, ?, ?, ?, ?)",
+                ("a.md", content_hash, "openai/text-embedding-3-small", pack_vector([9.0, 9.0]), "2026-01-01T00:00:00"),
+            )
+
+        cmd = RelateCommand()
+        with patch("vault_manager.properties.commands.relate.embed_texts") as mock_embed:
+            vectors = cmd._compute_semantic_embeddings(
+                {"a.md": note}, db, "test-key", "openai/text-embedding-3-small"
+            )
+
+        assert vectors["a.md"] == [9.0, 9.0]
+        mock_embed.assert_not_called()
+
+    def test_re_embeds_when_content_hash_changed(self, vault_database, tmp_path):
+        db = VaultDatabase(vault_root=tmp_path)
+        note = _make_note(tmp_path, "a.md", "new content")
+
+        with db:
+            db.write(
+                """
+                CREATE TABLE IF NOT EXISTS note_embeddings (
+                    file_path TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    vector BLOB NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            db.write(
+                "INSERT INTO note_embeddings VALUES (?, ?, ?, ?, ?)",
+                ("a.md", "stale-hash", "openai/text-embedding-3-small", pack_vector([9.0, 9.0]), "2026-01-01T00:00:00"),
+            )
+
+        cmd = RelateCommand()
+        with patch(
+            "vault_manager.properties.commands.relate.embed_texts",
+            return_value=[[1.0, 2.0]],
+        ) as mock_embed:
+            vectors = cmd._compute_semantic_embeddings(
+                {"a.md": note}, db, "test-key", "openai/text-embedding-3-small"
+            )
+
+        assert vectors["a.md"] == [1.0, 2.0]
+        mock_embed.assert_called_once()
+
+    def test_skips_sensitive_notes(self, vault_database, tmp_path):
+        db = VaultDatabase(vault_root=tmp_path)
+        note = _make_note(tmp_path, "secret.md", "sensitive content", is_sensitive=True)
+        cmd = RelateCommand()
+
+        with patch("vault_manager.properties.commands.relate.embed_texts") as mock_embed:
+            vectors = cmd._compute_semantic_embeddings(
+                {"secret.md": note}, db, "test-key", "openai/text-embedding-3-small"
+            )
+
+        assert "secret.md" not in vectors
+        mock_embed.assert_not_called()
+
+    def test_batch_failure_skips_only_that_batch(self, vault_database, tmp_path, capsys):
+        db = VaultDatabase(vault_root=tmp_path)
+        notes = {"a.md": _make_note(tmp_path, "a.md", "content a")}
+        cmd = RelateCommand()
+
+        with patch(
+            "vault_manager.properties.commands.relate.embed_texts",
+            side_effect=EmbeddingError("rate limited"),
+        ):
+            vectors = cmd._compute_semantic_embeddings(
+                notes, db, "test-key", "openai/text-embedding-3-small"
+            )
+
+        assert vectors == {}
+        assert "Warning" in capsys.readouterr().out
