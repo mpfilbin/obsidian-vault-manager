@@ -134,8 +134,20 @@ class RelateCommand(Command):
             target_dir, vault_root, target_path if is_single_file else None
         )
 
+        # Compute semantic embeddings if OpenRouter is configured
+        api_key = self._get_openrouter_api_key()
+        semantic_vectors: Optional[Dict[str, List[float]]] = None
+        if api_key and HAS_NUMPY:
+            model = self._get_embedding_model()
+            print(f"\nSemantic scoring: Enabled (model: {model})")
+            semantic_vectors = self._compute_semantic_embeddings(notes, db, api_key, model)
+        elif api_key and not HAS_NUMPY:
+            print("\nSemantic scoring: Disabled (numpy not installed - run `pip install -e '.[ai]'`)")
+        else:
+            print("\nSemantic scoring: Disabled (set OPENROUTER_API_KEY to enable)")
+
         # Find related notes
-        related_map = self._find_related_notes(notes, args.max_related, db)
+        related_map = self._find_related_notes(notes, args.max_related, db, semantic_vectors)
 
         # Update files (filter to single file if needed)
         with DryRunContext(args.dry_run) as ctx:

@@ -389,3 +389,55 @@ class TestScanNotesPopulatesEmbeddingFields:
         assert "**" not in notes["note.md"].embedding_text
 
         assert notes["secret.md"].is_sensitive is True
+
+
+from argparse import Namespace
+
+
+class TestRelateCommandEndToEndSemantic:
+    def test_semantically_similar_notes_get_related_with_no_shared_tags_or_links(
+        self, tmp_path, monkeypatch
+    ):
+        vault_path = tmp_path
+        (vault_path / "machine_learning.md").write_text(
+            "---\ntags: [ml-topic]\n---\n\nDiscussion of neural network training.\n",
+            encoding="utf-8",
+        )
+        (vault_path / "cooking.md").write_text(
+            "---\ntags: [recipe-topic]\n---\n\nA recipe for baking bread.\n",
+            encoding="utf-8",
+        )
+        (vault_path / "deep_learning.md").write_text(
+            "---\ntags: [dl-topic]\n---\n\nMore on neural network training approaches.\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+        # ml/deep_learning get near-identical vectors; cooking is orthogonal.
+        vectors_by_text = {
+            "Discussion of neural network training.\n": [1.0, 0.0],
+            "A recipe for baking bread.\n": [0.0, 1.0],
+            "More on neural network training approaches.\n": [0.99, 0.01],
+        }
+
+        def fake_embed_texts(texts, model, api_key):
+            return [vectors_by_text[text] for text in texts]
+
+        # execute() calls `db = VaultDatabase()` with no args, which internally
+        # resolves the vault root via get_vault_root(). Patching VaultDatabase's
+        # constructor to always return a fixed instance is the simplest way to
+        # point it at our temp vault.
+        with patch(
+            "vault_manager.properties.commands.relate.VaultDatabase",
+            return_value=VaultDatabase(vault_root=vault_path),
+        ), patch(
+            "vault_manager.properties.commands.relate.embed_texts",
+            side_effect=fake_embed_texts,
+        ):
+            cmd = RelateCommand()
+            args = Namespace(path=".", dry_run=False, overwrite=False, max_related=5)
+            cmd.execute(args)
+
+        ml_content = (vault_path / "machine_learning.md").read_text(encoding="utf-8")
+        assert "deep_learning" in ml_content
