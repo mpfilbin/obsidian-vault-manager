@@ -10,6 +10,7 @@ rules.
 from argparse import Namespace
 from unittest.mock import patch
 
+from vault_manager.properties.cli import create_parser
 from vault_manager.properties.commands.init import InitCommand
 
 
@@ -95,9 +96,6 @@ class TestInitCommand:
         _run_init(temp_vault)
 
         assert ignored_file.read_text(encoding="utf-8") == "# Drawing\n"
-
-
-from vault_manager.properties.cli import create_parser
 
 
 class TestInitCommandCliWiring:
