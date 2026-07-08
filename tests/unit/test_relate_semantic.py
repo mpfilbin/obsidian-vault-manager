@@ -7,6 +7,7 @@ weights, and the end-to-end acceptance case where two notes with no
 structural overlap are still related via semantic similarity.
 """
 
+from argparse import Namespace
 from collections import Counter
 from unittest.mock import patch
 
@@ -350,7 +351,9 @@ class TestCalculateSimilarityScoreWeights:
         cmd = RelateCommand()
         note1, note2 = self._notes_with_no_structural_overlap(tmp_path)
 
-        with_zero_semantic = cmd._calculate_similarity_score(note1, note2, Counter(), semantic_score=0.0)
+        with_zero_semantic = cmd._calculate_similarity_score(
+            note1, note2, Counter(), semantic_score=0.0
+        )
 
         assert with_zero_semantic == pytest.approx(0.0, abs=1e-6)
 
@@ -452,9 +455,6 @@ class TestScanNotesPopulatesEmbeddingFields:
         assert "**" not in notes["note.md"].embedding_text
 
         assert notes["secret.md"].is_sensitive is True
-
-
-from argparse import Namespace
 
 
 class TestRelateCommandEndToEndSemantic:
