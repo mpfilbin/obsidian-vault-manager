@@ -25,6 +25,14 @@ from vault_manager.core.vault import iter_markdown_files
 from ..common import extract_frontmatter
 from . import Command
 
+try:
+    import numpy as np
+
+    HAS_NUMPY = True
+except ImportError:
+    np = None
+    HAS_NUMPY = False
+
 DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 
 
@@ -501,11 +509,29 @@ class RelateCommand(Command):
             + title_score * 0.075
         )
 
+    def _build_semantic_similarity_lookup(
+        self, semantic_vectors: Optional[Dict[str, List[float]]]
+    ) -> Tuple[Dict[str, int], Optional["np.ndarray"]]:
+        """Build a path->index map and a precomputed cosine similarity matrix."""
+        if not semantic_vectors or not HAS_NUMPY:
+            return {}, None
+
+        paths = list(semantic_vectors.keys())
+        matrix = np.array([semantic_vectors[p] for p in paths], dtype=np.float32)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1e-10
+        normalized = matrix / norms
+        similarity_matrix = normalized @ normalized.T
+
+        path_to_index = {path: i for i, path in enumerate(paths)}
+        return path_to_index, similarity_matrix
+
     def _find_related_notes(
         self,
         notes: Dict[str, NoteMetadata],
         max_related: int = 5,
         db: Optional[VaultDatabase] = None,
+        semantic_vectors: Optional[Dict[str, List[float]]] = None,
     ) -> Dict[str, List[Tuple[str, float]]]:
         """Find related notes for each note in the collection."""
         print("\n2. Calculating tag frequencies...")
@@ -531,6 +557,8 @@ class RelateCommand(Command):
 
         print("\n3. Computing similarity scores...")
 
+        path_to_index, similarity_matrix = self._build_semantic_similarity_lookup(semantic_vectors)
+
         related_notes = {}
         note_list = list(notes.items())
         total_comparisons = len(note_list) * (len(note_list) - 1) // 2
@@ -542,7 +570,16 @@ class RelateCommand(Command):
             for j in range(i + 1, len(note_list)):
                 path2, note2 = note_list[j]
 
-                score = self._calculate_similarity_score(note1, note2, tag_frequencies)
+                semantic_score = None
+                if path1 in path_to_index and path2 in path_to_index:
+                    semantic_score = max(
+                        0.0,
+                        float(similarity_matrix[path_to_index[path1], path_to_index[path2]]),
+                    )
+
+                score = self._calculate_similarity_score(
+                    note1, note2, tag_frequencies, semantic_score
+                )
 
                 if score > 0.01:
                     scores.append((path2, score))

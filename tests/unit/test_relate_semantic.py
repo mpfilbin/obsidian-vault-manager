@@ -318,4 +318,51 @@ class TestCalculateSimilarityScoreWeights:
         score = cmd._calculate_similarity_score(note1, note2, Counter(), semantic_score=None)
 
         # folder 0.5*0.15 (tag/link/title all 0, no semantic term at all)
+
+        assert score == pytest.approx(0.5 * 0.15, abs=1e-6)
+
+
+class TestFindRelatedNotesWithSemanticVectors:
+    def test_semantically_similar_notes_get_related_despite_no_structural_overlap(self, tmp_path):
+        cmd = RelateCommand()
+
+        note_a = NoteMetadata(tmp_path / "a.md", "a.md")
+        note_a.tags = {"unique-a"}
+        note_a.folder = "FolderA"
+        note_a.title_words = {"alpha"}
+
+        note_b = NoteMetadata(tmp_path / "b.md", "b.md")
+        note_b.tags = {"unique-b"}
+        note_b.folder = "FolderB"
+        note_b.title_words = {"beta"}
+
+        notes = {"a.md": note_a, "b.md": note_b}
+        semantic_vectors = {"a.md": [1.0, 0.0], "b.md": [1.0, 0.0]}  # identical direction
+
+        related = cmd._find_related_notes(notes, max_related=5, semantic_vectors=semantic_vectors)
+
+        assert "b.md" in [path for path, _ in related["a.md"]]
+        score = next(score for path, score in related["a.md"] if path == "b.md")
+        assert score == pytest.approx(0.40, abs=1e-6)
+
+    def test_note_missing_from_semantic_vectors_falls_back_to_structural_weights(self, tmp_path):
+        cmd = RelateCommand()
+
+        note_a = NoteMetadata(tmp_path / "a.md", "a.md")
+        note_a.folder = "Parent"
+
+        note_b = NoteMetadata(tmp_path / "b.md", "b.md")
+        note_b.folder = "Parent/Child"
+
+        notes = {"a.md": note_a, "b.md": note_b}
+        # Only "a.md" has a vector - "b.md" is absent (e.g. embedding failed).
+        semantic_vectors = {"a.md": [1.0, 0.0]}
+
+        related = cmd._find_related_notes(notes, max_related=5, semantic_vectors=semantic_vectors)
+
+        # No semantic score is available for this pair (b.md has no vector), so it
+        # falls back to the original weights. Tags/links/title are all empty here,
+        # so only the folder-proximity component (parent/child = 0.5 similarity,
+        # 15% weight) contributes.
+        score = next(score for path, score in related["a.md"] if path == "b.md")
         assert score == pytest.approx(0.5 * 0.15, abs=1e-6)
