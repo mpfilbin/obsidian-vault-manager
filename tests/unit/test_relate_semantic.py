@@ -366,3 +366,26 @@ class TestFindRelatedNotesWithSemanticVectors:
         # 15% weight) contributes.
         score = next(score for path, score in related["a.md"] if path == "b.md")
         assert score == pytest.approx(0.5 * 0.15, abs=1e-6)
+
+
+class TestScanNotesPopulatesEmbeddingFields:
+    def test_embedding_text_and_sensitivity_are_populated(self, tmp_path):
+        note_path = tmp_path / "note.md"
+        note_path.write_text(
+            "---\ntags: [test]\n---\n# Heading\n\nSome **bold** content here.\n",
+            encoding="utf-8",
+        )
+        sensitive_path = tmp_path / "secret.md"
+        sensitive_path.write_text(
+            "---\ntags: [test]\nsensitive: true\n---\n\nHidden content.\n",
+            encoding="utf-8",
+        )
+
+        cmd = RelateCommand()
+        notes = cmd._scan_notes_for_metadata(tmp_path, tmp_path)
+
+        assert notes["note.md"].is_sensitive is False
+        assert "bold" in notes["note.md"].embedding_text
+        assert "**" not in notes["note.md"].embedding_text
+
+        assert notes["secret.md"].is_sensitive is True

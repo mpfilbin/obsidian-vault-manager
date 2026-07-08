@@ -387,6 +387,8 @@ class RelateCommand(Command):
                 note.title_words = self._extract_title_words(file_path.name)
                 note.folder = str(file_path.parent.relative_to(vault_root))
                 note.has_related = self._check_has_related_property(frontmatter)
+                note.is_sensitive = FrontmatterManager.is_sensitive_note(content)
+                note.embedding_text = self._prepare_embedding_text(body)
 
                 notes[relative_path] = note
 
