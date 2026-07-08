@@ -395,26 +395,44 @@ from argparse import Namespace
 
 
 class TestRelateCommandEndToEndSemantic:
-    def test_semantically_similar_notes_get_related_with_no_shared_tags_or_links(
+    def test_semantically_similar_notes_get_related_with_no_shared_tags_folders_or_titles(
         self, tmp_path, monkeypatch
     ):
+        # Three sibling folders (not nested in each other) so
+        # _calculate_folder_similarity is exactly 0 for every pair.
         vault_path = tmp_path
-        (vault_path / "machine_learning.md").write_text(
+        (vault_path / "TopicA").mkdir()
+        (vault_path / "TopicB").mkdir()
+        (vault_path / "TopicC").mkdir()
+
+        # Filenames share no title words across any pair (unlike the previous
+        # "machine_learning"/"deep_learning" pairing, which both contain
+        # "learning" and would clear the threshold via title similarity alone),
+        # so _calculate_title_similarity is also exactly 0 for every pair.
+        (vault_path / "TopicA" / "neural_networks.md").write_text(
             "---\ntags: [ml-topic]\n---\n\nDiscussion of neural network training.\n",
             encoding="utf-8",
         )
-        (vault_path / "cooking.md").write_text(
+        (vault_path / "TopicB" / "sourdough_bread.md").write_text(
             "---\ntags: [recipe-topic]\n---\n\nA recipe for baking bread.\n",
             encoding="utf-8",
         )
-        (vault_path / "deep_learning.md").write_text(
+        (vault_path / "TopicC" / "gradient_descent.md").write_text(
             "---\ntags: [dl-topic]\n---\n\nMore on neural network training approaches.\n",
             encoding="utf-8",
         )
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
-        # ml/deep_learning get near-identical vectors; cooking is orthogonal.
+        # neural_networks/gradient_descent get near-identical vectors (cosine
+        # similarity ~0.9999); sourdough_bread is orthogonal to neural_networks
+        # (cosine similarity exactly 0.0). Tags are distinct, folders are
+        # distinct siblings, and title words share nothing across any pair, so
+        # with tag/link/folder/title components all pinned at 0.0, the ONLY
+        # way a pair can clear the `> 0.01` inclusion threshold in
+        # _find_related_notes is via the semantic component - which only
+        # exists if execute() actually calls _compute_semantic_embeddings and
+        # threads the result into _find_related_notes.
         vectors_by_text = {
             "Discussion of neural network training.\n": [1.0, 0.0],
             "A recipe for baking bread.\n": [0.0, 1.0],
@@ -439,5 +457,10 @@ class TestRelateCommandEndToEndSemantic:
             args = Namespace(path=".", dry_run=False, overwrite=False, max_related=5)
             cmd.execute(args)
 
-        ml_content = (vault_path / "machine_learning.md").read_text(encoding="utf-8")
-        assert "deep_learning" in ml_content
+        nn_content = (vault_path / "TopicA" / "neural_networks.md").read_text(encoding="utf-8")
+        # gradient_descent: semantic cosine ~0.9999 * 0.40 weight ~= 0.40, well above 0.01.
+        assert "gradient_descent" in nn_content
+        # sourdough_bread: semantic cosine == 0.0 (orthogonal vectors) * 0.40 weight == 0.0,
+        # below the 0.01 threshold, and no structural component can push it over
+        # since tags/folders/titles share nothing with neural_networks.
+        assert "sourdough_bread" not in nn_content
