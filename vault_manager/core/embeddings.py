@@ -55,7 +55,7 @@ def embed_texts(texts: List[str], model: str, api_key: str) -> List[List[float]]
             with urllib.request.urlopen(request, timeout=30) as response:
                 body = json.loads(response.read().decode("utf-8"))
             return [item["embedding"] for item in body["data"]]
-        except (urllib.error.URLError, KeyError, ValueError) as e:
+        except (OSError, KeyError, ValueError) as e:
             last_error = e
 
     raise EmbeddingError(f"OpenRouter embeddings request failed: {last_error}")
