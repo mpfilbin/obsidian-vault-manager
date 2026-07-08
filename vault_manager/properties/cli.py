@@ -32,6 +32,8 @@ Examples:
   vault properties validate .
   vault properties repair --dry-run
   vault properties repair --backup
+  vault properties init . --dry-run
+  vault properties init Personal
 
 The script will:
 - Recursively process all .md files in the specified directory
@@ -55,6 +57,7 @@ The script will:
     from .commands.repair import RepairCommand
     from .commands.set import SetCommand
     from .commands.audit import AuditCommand
+    from .commands.init import InitCommand
 
     # Enrich command (consolidates summaries and related notes)
     enrich_parser = subparsers.add_parser(
@@ -98,6 +101,13 @@ The script will:
     )
     AuditCommand.configure_parser(audit_parser)
 
+    # Init command
+    init_parser = subparsers.add_parser(
+        'init',
+        help='Initialize YAML frontmatter in files that have none'
+    )
+    InitCommand.configure_parser(init_parser)
+
     return parser
 
 
@@ -117,6 +127,7 @@ def main() -> None:
     from .commands.repair import RepairCommand
     from .commands.set import SetCommand
     from .commands.audit import AuditCommand
+    from .commands.init import InitCommand
 
     # Map command names to command classes
     command_map = {
@@ -126,6 +137,7 @@ def main() -> None:
         'repair': RepairCommand,
         'set': SetCommand,
         'audit': AuditCommand,
+        'init': InitCommand,
     }
 
     # Get the command class

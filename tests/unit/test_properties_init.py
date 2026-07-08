@@ -95,3 +95,26 @@ class TestInitCommand:
         _run_init(temp_vault)
 
         assert ignored_file.read_text(encoding="utf-8") == "# Drawing\n"
+
+
+from vault_manager.properties.cli import create_parser
+
+
+class TestInitCommandCliWiring:
+    def test_init_subcommand_is_registered(self):
+        parser = create_parser()
+
+        args = parser.parse_args(["init", "Personal", "--dry-run"])
+
+        assert args.command == "init"
+        assert args.directory == "Personal"
+        assert args.dry_run is True
+
+    def test_init_subcommand_defaults(self):
+        parser = create_parser()
+
+        args = parser.parse_args(["init"])
+
+        assert args.command == "init"
+        assert args.directory is None
+        assert args.dry_run is False
