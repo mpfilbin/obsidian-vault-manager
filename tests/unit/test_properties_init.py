@@ -97,6 +97,14 @@ class TestInitCommand:
 
         assert ignored_file.read_text(encoding="utf-8") == "# Drawing\n"
 
+    def test_leaves_adjacent_empty_frontmatter_delimiters_untouched(self, temp_vault):
+        target = temp_vault / "empty_frontmatter.md"
+        target.write_text("---\n---\n# Heading\n", encoding="utf-8")
+
+        _run_init(temp_vault)
+
+        assert target.read_text(encoding="utf-8") == "---\n---\n# Heading\n"
+
 
 class TestInitCommandCliWiring:
     def test_init_subcommand_is_registered(self):

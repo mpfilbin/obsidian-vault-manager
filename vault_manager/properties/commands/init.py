@@ -7,16 +7,18 @@ all. Files that already have any frontmatter (even without a 'tags' key)
 are left untouched.
 """
 
+import re
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import Optional, Tuple
 
-from . import Command
-from ..common import get_vault_root, extract_frontmatter
-from vault_manager.core.vault import iter_markdown_files
-from vault_manager.core.file_ops import atomic_update
 from vault_manager.core.dry_run import DryRunContext, print_dry_run_summary
+from vault_manager.core.file_ops import atomic_update
+from vault_manager.core.vault import iter_markdown_files
+
+from ..common import extract_frontmatter, get_vault_root
+from . import Command
 
 
 class InitCommand(Command):
@@ -64,10 +66,11 @@ class InitCommand(Command):
         print("Initialize Frontmatter")
         print("=" * 60)
         print(f"Vault root: {vault_root}")
-        print(f"Target directory: {target_dir.relative_to(vault_root) if target_dir != vault_root else '.'}")
+        relative_target = target_dir.relative_to(vault_root) if target_dir != vault_root else '.'
+        print(f"Target directory: {relative_target}")
         print(f"Mode: {'DRY RUN (preview only)' if args.dry_run else 'MODIFY FILES'}")
-        print(f"Ignored directories: .obsidian, .trash, Excalidraw, Calendar")
-        print(f"Ignored file types: .excalidraw.md")
+        print("Ignored directories: .obsidian, .trash, Excalidraw, Calendar")
+        print("Ignored file types: .excalidraw.md")
         print("\nFiles with no frontmatter will get: tags: []")
 
         # Process directory with DryRunContext
@@ -77,12 +80,31 @@ class InitCommand(Command):
 
         # Final message
         if ctx.stats.files_modified > 0:
+            plural = 's' if ctx.stats.files_modified != 1 else ''
             if not args.dry_run:
-                print(f"\nDone! Modified {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''}.")
+                print(f"\nDone! Modified {ctx.stats.files_modified} file{plural}.")
             else:
-                print(f"\nDry run complete. {ctx.stats.files_modified} file{'s' if ctx.stats.files_modified != 1 else ''} would be modified.")
+                count = ctx.stats.files_modified
+                print(f"\nDry run complete. {count} file{plural} would be modified.")
         else:
             print("\nNo changes needed.")
+
+    @staticmethod
+    def _has_frontmatter(content: str) -> bool:
+        """
+        Check whether content has any YAML frontmatter block.
+
+        Falls back to a direct regex check for adjacent '---' delimiters
+        with no blank line between them (e.g. "---\\n---\\n"), a case
+        FrontmatterManager.extract_frontmatter's regex does not match
+        because it requires a body line between the delimiters.
+        """
+        frontmatter, _ = extract_frontmatter(content)
+        if frontmatter is not None:
+            return True
+
+        normalized = content.replace('\r\n', '\n').replace('\r', '\n')
+        return bool(re.match(r'^---\s*\n---\s*\n', normalized))
 
     def _init_file(self, file_path: Path, dry_run: bool = False) -> Tuple[bool, bool]:
         """
@@ -98,12 +120,11 @@ class InitCommand(Command):
         def updater(content: str) -> Optional[str]:
             nonlocal needs_init
 
-            frontmatter, body = extract_frontmatter(content)
-
-            if frontmatter is not None:
-                # Already has frontmatter (even without tags) - skip
+            if self._has_frontmatter(content):
+                # Already has frontmatter (even without tags, or empty) - skip
                 return None
 
+            _, body = extract_frontmatter(content)
             needs_init = True
             return f"---\ntags: []\n---\n{body}"
 
