@@ -113,7 +113,8 @@ class InitCommand(Command):
         Returns:
             Tuple of (needs_init, success).
             - needs_init: True if the file had no frontmatter at all
-            - success: True if the write succeeded (or dry-run, or no change needed)
+            - success: True if the file was read successfully (or dry-run
+              write succeeded). False means a genuine read/write failure.
         """
         needs_init = False
 
@@ -121,8 +122,11 @@ class InitCommand(Command):
             nonlocal needs_init
 
             if self._has_frontmatter(content):
-                # Already has frontmatter (even without tags, or empty) - skip
-                return None
+                # Already has frontmatter (even without tags, or empty) - skip.
+                # Return the unchanged content (not None) so atomic_update
+                # reports this as a successful no-op, not a failure - that
+                # keeps `success` meaningful only for genuine read/write errors.
+                return content
 
             _, body = extract_frontmatter(content)
             needs_init = True
@@ -149,16 +153,15 @@ class InitCommand(Command):
             relative_path = file_path.relative_to(vault_root)
 
             needs_init, success = self._init_file(file_path, ctx.dry_run)
+            ctx.stats.increment('files_processed')
 
-            if not needs_init:
+            if not success:
+                ctx.stats.increment('files_failed')
+                print(f"  Failed: {relative_path}")
+            elif not needs_init:
                 ctx.stats.increment('files_skipped')
-                continue
-
-            if success:
+            else:
                 ctx.stats.increment('files_modified')
                 ctx.record_change(file_path, "Initialized frontmatter with tags: []")
                 mode = "Would initialize" if ctx.dry_run else "Initialized"
                 print(f"  {mode}: {relative_path}")
-            else:
-                ctx.stats.increment('files_failed')
-                print(f"  Failed: {relative_path}")

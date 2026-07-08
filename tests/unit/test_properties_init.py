@@ -7,8 +7,11 @@ untouched, supports --dry-run, and respects directory scope and ignore
 rules.
 """
 
+import os
 from argparse import Namespace
 from unittest.mock import patch
+
+import pytest
 
 from vault_manager.properties.cli import create_parser
 from vault_manager.properties.commands.init import InitCommand
@@ -104,6 +107,35 @@ class TestInitCommand:
         _run_init(temp_vault)
 
         assert target.read_text(encoding="utf-8") == "---\n---\n# Heading\n"
+
+    def test_summary_reports_files_processed(self, vault_with_notes, capsys):
+        vault_path = vault_with_notes['path']
+
+        _run_init(vault_path)
+
+        output = capsys.readouterr().out
+        processed_line = next(
+            line for line in output.splitlines() if line.strip().startswith("Files processed:")
+        )
+        assert int(processed_line.split(":")[1].strip()) == 3
+
+    def test_unreadable_file_reported_as_failed_not_skipped(self, temp_vault, capsys):
+        target = temp_vault / "unreadable.md"
+        target.write_text("# Unreadable\n", encoding="utf-8")
+        target.chmod(0o000)
+
+        if os.access(target, os.R_OK):
+            target.chmod(0o644)
+            pytest.skip("running as a user that bypasses file permissions (e.g. root)")
+
+        try:
+            _run_init(temp_vault)
+        finally:
+            target.chmod(0o644)
+
+        output = capsys.readouterr().out
+        assert "Failed:" in output
+        assert "unreadable.md" in output
 
 
 class TestInitCommandCliWiring:
