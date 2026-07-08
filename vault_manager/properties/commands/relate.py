@@ -142,7 +142,10 @@ class RelateCommand(Command):
             print(f"\nSemantic scoring: Enabled (model: {model})")
             semantic_vectors = self._compute_semantic_embeddings(notes, db, api_key, model)
         elif api_key and not HAS_NUMPY:
-            print("\nSemantic scoring: Disabled (numpy not installed - run `pip install -e '.[ai]'`)")
+            print(
+                "\nSemantic scoring: Disabled (numpy not installed - "
+                "run `pip install -e '.[ai]'`)"
+            )
         else:
             print("\nSemantic scoring: Disabled (set OPENROUTER_API_KEY to enable)")
 
@@ -283,8 +286,10 @@ class RelateCommand(Command):
 
         Returns:
             Dict mapping file_path -> embedding vector for every note with a
-            usable embedding. Sensitive notes, and notes whose embedding
-            request failed, are simply absent from the returned dict.
+            usable embedding. Sensitive notes, notes with an empty embedding
+            text, and notes whose embedding request failed (or returned a
+            mismatched number of vectors), are simply absent from the
+            returned dict.
         """
         vectors: Dict[str, List[float]] = {}
         upserts: List[Tuple[str, str, str, bytes, str]] = []
@@ -314,7 +319,7 @@ class RelateCommand(Command):
             to_embed: List[Tuple[str, str, str]] = []  # (file_path, text, content_hash)
 
             for path, note in notes.items():
-                if note.is_sensitive:
+                if note.is_sensitive or not note.embedding_text.strip():
                     continue
 
                 content_hash = self._compute_content_hash(note.embedding_text)
@@ -334,6 +339,13 @@ class RelateCommand(Command):
                     embeddings = embed_texts(texts, model, api_key)
                 except EmbeddingError as e:
                     print(f"   Warning: Embedding request failed for {len(batch)} note(s): {e}")
+                    continue
+
+                if len(embeddings) != len(texts):
+                    print(
+                        f"   Warning: Embedding response returned {len(embeddings)} vector(s) "
+                        f"for {len(texts)} note(s) requested; skipping this batch"
+                    )
                     continue
 
                 timestamp = datetime.now(timezone.utc).isoformat()

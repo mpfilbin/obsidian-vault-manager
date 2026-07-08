@@ -252,6 +252,69 @@ class TestComputeSemanticEmbeddings:
         assert vectors == {}
         assert "Warning" in capsys.readouterr().out
 
+    def test_empty_bodied_note_is_skipped_without_affecting_other_notes(
+        self, vault_database, tmp_path
+    ):
+        db = VaultDatabase(vault_root=tmp_path)
+        notes = {
+            "a.md": _make_note(tmp_path, "a.md", "content about cats"),
+            "empty.md": _make_note(tmp_path, "empty.md", ""),
+        }
+        cmd = RelateCommand()
+
+        with patch(
+            "vault_manager.properties.commands.relate.embed_texts",
+            return_value=[[1.0, 0.0]],
+        ) as mock_embed:
+            vectors = cmd._compute_semantic_embeddings(
+                notes, db, "test-key", "openai/text-embedding-3-small"
+            )
+
+        # Only the non-empty note's text was ever sent for embedding.
+        mock_embed.assert_called_once()
+        called_texts = mock_embed.call_args[0][0]
+        assert called_texts == ["content about cats"]
+
+        assert vectors["a.md"] == [1.0, 0.0]
+        assert "empty.md" not in vectors
+
+    def test_whitespace_only_body_is_treated_as_empty(self, vault_database, tmp_path):
+        db = VaultDatabase(vault_root=tmp_path)
+        notes = {"blank.md": _make_note(tmp_path, "blank.md", "   \n\t  ")}
+        cmd = RelateCommand()
+
+        with patch("vault_manager.properties.commands.relate.embed_texts") as mock_embed:
+            vectors = cmd._compute_semantic_embeddings(
+                notes, db, "test-key", "openai/text-embedding-3-small"
+            )
+
+        assert vectors == {}
+        mock_embed.assert_not_called()
+
+    def test_mismatched_embedding_count_skips_batch(self, vault_database, tmp_path, capsys):
+        db = VaultDatabase(vault_root=tmp_path)
+        notes = {
+            "a.md": _make_note(tmp_path, "a.md", "content a"),
+            "b.md": _make_note(tmp_path, "b.md", "content b"),
+        }
+        cmd = RelateCommand()
+
+        # Simulate a malformed API response: two texts requested, one vector returned.
+        with patch(
+            "vault_manager.properties.commands.relate.embed_texts",
+            return_value=[[1.0, 0.0]],
+        ):
+            vectors = cmd._compute_semantic_embeddings(
+                notes, db, "test-key", "openai/text-embedding-3-small"
+            )
+
+        assert vectors == {}
+        assert "Warning" in capsys.readouterr().out
+
+        with db:
+            rows = db.query("SELECT file_path FROM note_embeddings")
+        assert rows == []
+
 
 class TestCalculateSimilarityScoreWeights:
     def _notes_with_no_structural_overlap(self, tmp_path):
