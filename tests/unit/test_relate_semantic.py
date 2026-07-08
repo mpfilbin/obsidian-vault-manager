@@ -7,7 +7,10 @@ weights, and the end-to-end acceptance case where two notes with no
 structural overlap are still related via semantic similarity.
 """
 
+from collections import Counter
 from unittest.mock import patch
+
+import pytest
 
 from vault_manager.core.database import VaultDatabase
 from vault_manager.core.embeddings import EmbeddingError, pack_vector
@@ -248,3 +251,42 @@ class TestComputeSemanticEmbeddings:
 
         assert vectors == {}
         assert "Warning" in capsys.readouterr().out
+
+
+class TestCalculateSimilarityScoreWeights:
+    def _notes_with_no_structural_overlap(self, tmp_path):
+        note1 = NoteMetadata(tmp_path / "a.md", "a.md")
+        note1.tags = {"unique-tag-1"}
+        note1.folder = "FolderA"
+        note1.title_words = {"alpha"}
+
+        note2 = NoteMetadata(tmp_path / "b.md", "b.md")
+        note2.tags = {"unique-tag-2"}
+        note2.folder = "FolderB"
+        note2.title_words = {"beta"}
+
+        return note1, note2
+
+    def test_without_semantic_score_uses_original_weights(self, tmp_path):
+        cmd = RelateCommand()
+        note1, note2 = self._notes_with_no_structural_overlap(tmp_path)
+
+        score = cmd._calculate_similarity_score(note1, note2, Counter(), semantic_score=None)
+
+        assert score == 0.0
+
+    def test_semantic_score_of_one_with_no_structural_overlap(self, tmp_path):
+        cmd = RelateCommand()
+        note1, note2 = self._notes_with_no_structural_overlap(tmp_path)
+
+        score = cmd._calculate_similarity_score(note1, note2, Counter(), semantic_score=1.0)
+
+        assert score == pytest.approx(0.40, abs=1e-6)
+
+    def test_semantic_score_of_zero_matches_structural_only(self, tmp_path):
+        cmd = RelateCommand()
+        note1, note2 = self._notes_with_no_structural_overlap(tmp_path)
+
+        with_zero_semantic = cmd._calculate_similarity_score(note1, note2, Counter(), semantic_score=0.0)
+
+        assert with_zero_semantic == pytest.approx(0.0, abs=1e-6)

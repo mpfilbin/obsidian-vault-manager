@@ -473,19 +473,33 @@ class RelateCommand(Command):
         return len(common_words) / len(all_words)
 
     def _calculate_similarity_score(
-        self, note1: NoteMetadata, note2: NoteMetadata, tag_frequencies: Dict[str, int]
+        self,
+        note1: NoteMetadata,
+        note2: NoteMetadata,
+        tag_frequencies: Dict[str, int],
+        semantic_score: Optional[float] = None,
     ) -> float:
         """
         Calculate overall similarity score using weighted components.
 
-        Weights: Tag (40%), Link (30%), Folder (15%), Title (15%)
+        With a semantic score: Semantic (40%), Tag (25%), Link (20%), Folder (7.5%), Title (7.5%)
+        Without one: Tag (40%), Link (30%), Folder (15%), Title (15%)
         """
         tag_score = self._calculate_tag_similarity(note1, note2, tag_frequencies)
         link_score = self._calculate_link_similarity(note1, note2)
         folder_score = self._calculate_folder_similarity(note1, note2)
         title_score = self._calculate_title_similarity(note1, note2)
 
-        return tag_score * 0.40 + link_score * 0.30 + folder_score * 0.15 + title_score * 0.15
+        if semantic_score is None:
+            return tag_score * 0.40 + link_score * 0.30 + folder_score * 0.15 + title_score * 0.15
+
+        return (
+            semantic_score * 0.40
+            + tag_score * 0.25
+            + link_score * 0.20
+            + folder_score * 0.075
+            + title_score * 0.075
+        )
 
     def _find_related_notes(
         self,
