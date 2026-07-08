@@ -9,8 +9,6 @@ structural overlap are still related via semantic similarity.
 
 from unittest.mock import patch
 
-import pytest
-
 from vault_manager.core.database import VaultDatabase
 from vault_manager.core.embeddings import EmbeddingError, pack_vector
 from vault_manager.properties.commands.relate import NoteMetadata, RelateCommand
@@ -141,7 +139,10 @@ class TestComputeSemanticEmbeddings:
 
         with db:
             rows = db.query("SELECT file_path, model FROM note_embeddings ORDER BY file_path")
-        assert rows == [("a.md", "openai/text-embedding-3-small"), ("b.md", "openai/text-embedding-3-small")]
+        assert rows == [
+            ("a.md", "openai/text-embedding-3-small"),
+            ("b.md", "openai/text-embedding-3-small"),
+        ]
 
     def test_reuses_cached_embedding_when_hash_matches(self, vault_database, tmp_path):
         db = VaultDatabase(vault_root=tmp_path)
@@ -162,7 +163,13 @@ class TestComputeSemanticEmbeddings:
             )
             db.write(
                 "INSERT INTO note_embeddings VALUES (?, ?, ?, ?, ?)",
-                ("a.md", content_hash, "openai/text-embedding-3-small", pack_vector([9.0, 9.0]), "2026-01-01T00:00:00"),
+                (
+                    "a.md",
+                    content_hash,
+                    "openai/text-embedding-3-small",
+                    pack_vector([9.0, 9.0]),
+                    "2026-01-01T00:00:00",
+                ),
             )
 
         cmd = RelateCommand()
@@ -192,7 +199,13 @@ class TestComputeSemanticEmbeddings:
             )
             db.write(
                 "INSERT INTO note_embeddings VALUES (?, ?, ?, ?, ?)",
-                ("a.md", "stale-hash", "openai/text-embedding-3-small", pack_vector([9.0, 9.0]), "2026-01-01T00:00:00"),
+                (
+                    "a.md",
+                    "stale-hash",
+                    "openai/text-embedding-3-small",
+                    pack_vector([9.0, 9.0]),
+                    "2026-01-01T00:00:00",
+                ),
             )
 
         cmd = RelateCommand()
